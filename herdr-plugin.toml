@@ -1,0 +1,35 @@
+id = "herdr-hunk"
+name = "Hunk Review"
+version = "1.0.0"
+min_herdr_version = "0.8.0"
+description = "Review the changes an agent made, in Hunk, beside the pane that made them"
+platforms = ["linux", "macos"]
+
+# No [[build]]: the plugin directory is the source. `plugin link` does not run
+# build commands, so a compile step would silently serve a stale binary.
+#
+# Bare `python3` is deliberate. Plugin commands inherit the Herdr server's
+# environment, which carries the full login PATH, so `python3`, `git`, and
+# `hunk` all resolve from it. An absolute interpreter path would break on the
+# next interpreter upgrade or hardcode a username.
+
+[[actions]]
+id = "review"
+title = "Review changes in Hunk"
+description = "Open or reuse a Hunk review of this checkout, including committed work"
+contexts = ["pane"]
+command = ["python3", "herdr_hunk.py", "review"]
+
+[[actions]]
+id = "review-commit"
+title = "Review last commit in Hunk"
+description = "Open or reuse a Hunk review of the most recent commit in this checkout"
+contexts = ["pane"]
+command = ["python3", "herdr_hunk.py", "review-commit"]
+
+[[actions]]
+id = "send-comments"
+title = "Send Hunk review notes to the agent"
+description = "Stage this checkout's Hunk review notes in the agent pane that wrote the code"
+contexts = ["pane"]
+command = ["python3", "herdr_hunk.py", "send-comments"]
