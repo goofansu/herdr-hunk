@@ -21,12 +21,24 @@ The product goal, clarified by the maintainer on 2026-08-13, is:
 
 > A Hunk pane is the agent's copilot in the current tab.
 
-The intended unit is therefore an **agent–Hunk pair**, with the Hunk pane in the
-agent's tab and review comments returning to that agent. The current
-implementation only establishes this pair on first open. Its persisted identity
-is the checkout path, so later invocations can reuse the same Hunk from another
-tab or workspace and repoint its remembered origin to another agent. Treat that
-as an implementation gap, not the desired product model.
+In normal use, invoking review from an agent should therefore open or reuse that
+agent's Hunk in the same tab, and comments from a plugin-managed Hunk should
+return deterministically to its paired agent. Repeated invocation should not
+multiply panes unnecessarily, and one agent must never silently take over
+another agent's Hunk or comments.
+
+This is a user-facing relationship, not a demand for rigid layout ownership. A
+user may move a Hunk pane deliberately; the plugin should respect that rather
+than automatically moving it back. Review from an ordinary shell remains useful
+when exactly one agent is in the current tab. Pairing only needs to follow the
+current agent occupying its pane; it need not survive replacement by another
+agent process.
+
+The current implementation only establishes the desired relationship on first
+open. Its persisted identity is the checkout path, so later invocations can
+reuse the same Hunk from another tab or workspace and repoint its remembered
+origin to another agent. Treat that as an implementation gap, not the desired
+product model.
 
 The plugin is one standard-library Python script, `herdr_hunk.py`. Herdr runs it
 directly from the plugin directory; there is no package, daemon, build artifact,

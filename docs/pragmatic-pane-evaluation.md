@@ -23,18 +23,46 @@ Herdr itself was not installed in the orb. Layout/focus conclusions therefore
 come from Herdr's documented contract rather than a live Herdr screen. Hunk UI
 and session conclusions are live observations.
 
-## Product invariant
+## Product behavior specification
 
 The maintainer clarified the goal after the initial evaluation:
 
 > A Hunk pane is the agent's copilot in the current tab.
 
-Accordingly, the expected ownership unit is an **agent–Hunk pair**, not a
-checkout-global review. Opening or reusing a review from an agent should leave
-that agent's Hunk in the same tab, and sending comments from that Hunk should
-have one deterministic destination: its paired agent. Findings below that
-describe checkout-global behavior are implementation gaps, not acceptable
-alternative semantics.
+### Required stories
+
+1. Invoking review from an agent opens or reuses that agent's Hunk in the same
+   tab.
+2. Repeated invocation does not multiply panes unnecessarily.
+3. Comments from a plugin-managed Hunk return deterministically to its paired
+   agent.
+4. One agent never silently takes over another agent's Hunk or comments.
+
+The conceptual unit is therefore an **agent–Hunk pair**, not a checkout-global
+review. Findings below that describe checkout-global takeover are implementation
+gaps.
+
+### Permissive recovery rules
+
+- Review from an ordinary shell is allowed when exactly one agent is in the
+  current tab. Ambiguous shell invocation should ask or fail clearly rather than
+  guess by lifecycle recency.
+- A Hunk deliberately moved by the user is not moved back automatically. Reuse
+  should focus it and explain where it is; restoring adjacency should be an
+  explicit action.
+- Pairing follows the current agent pane. If that agent exits or is replaced,
+  stale state may be discarded and rebuilt; process replacement need not retain
+  the old relationship.
+- Switching between `diff` and `show` is not blocked merely because notes exist.
+  Feedback should retain or report enough target context to remain intelligible.
+- Manually opened Hunk sessions are allowed. The plugin should stop only when an
+  operation is genuinely ambiguous, and should explain how to recover.
+- Hunk copilots are created on demand. The plugin does not proactively add one
+  for every agent in a crowded tab.
+
+Session IDs, state keys, and managed plugin panes are possible implementation
+mechanisms, not product requirements. The implementation should use the smallest
+mechanism that satisfies these stories.
 
 ## Combination results
 
@@ -62,7 +90,7 @@ alternative semantics.
 The first invocation creates the intended association: agent on the left, its
 Hunk copilot on the right. The state model does not preserve that association.
 Another agent, tab, or workspace using the same checkout takes over the review
-and becomes its origin. This conflicts directly with the product invariant.
+and becomes its origin. This conflicts directly with the required stories.
 
 The mismatch is most harmful across workspaces: the review remains physically in
 one workspace, attribution moves to another, and comment discovery is scoped back
@@ -110,53 +138,37 @@ and Herdr provides zoom—but the initial layout optimizes “beside” more tha
 
 ## Recommendations, in order
 
-### P0 — prevent wrong or stranded handoffs
+### P0 — preserve pairing without making recovery rigid
 
-1. **Make the agent–Hunk pair the persisted identity.** Key review records by a
-   stable agent-pane identity (including its tab/workspace context), not only by
-   checkout. Store the paired Hunk pane and Hunk session ID in that record.
-   Invoking a review from the agent must create or reuse that pair in the current
-   tab; invoking from Hunk must route comments directly to the paired agent. Do
-   not use workspace-wide recency heuristics for a known pair.
-2. **Address Hunk sessions by stored session ID.** Multiple agents can work in
-   separate tabs on the same checkout, so each can have a Hunk copilot. Real Hunk
-   permits those sessions, but `--repo` becomes ambiguous. Session get, reload,
-   and comment operations must therefore use the pair's session ID. Pane launch
-   needs a bounded registration step that identifies and persists the new
-   session rather than assuming repository uniqueness.
-3. **Restore pair colocation when it drifts.** If a paired Hunk was manually moved
-   away, a review action should move it back beside its agent (persisting the new
-   pane ID returned by cross-workspace moves), or fail explicitly if restoring
-   the pair is unsafe. Merely focusing the Hunk's current workspace does not meet
-   the goal.
-4. **Refuse unmanaged duplicate Hunk sessions.** Before opening a new paired pane
-   with no usable record, inspect Hunk sessions for the checkout. If one already
-   exists and cannot be unambiguously correlated to a Herdr pane, fail
-   with an actionable “close or adopt the existing Hunk review” message. Do not
-   split first. Existing sessions belonging to other recorded agent–Hunk pairs
-   are expected and are distinguished by session ID; only unmanaged sessions are
-   a conflict.
-5. **Guard target changes when user notes exist.** Read the current Hunk input
-   kind and user-note count before changing `diff` to `show` or vice versa. If
-   notes exist, keep the current target and ask the user to send/remove them
-   first within that pair.
+1. **Persist enough pair identity to prevent takeover.** A review record must
+   distinguish agents using the same checkout. The exact key and whether a Hunk
+   session ID is stored are implementation decisions. When a known pair exists,
+   comment routing must not fall back to workspace-wide lifecycle recency.
+2. **Reuse the pair in its current location.** Normally it is in the agent's tab
+   because that is where the plugin creates it. If the user moved it, focus that
+   pane and report its location rather than mutating the layout automatically.
+3. **Handle multiple Hunk sessions deliberately.** Real Hunk permits multiple
+   sessions for one checkout but makes `--repo` selectors ambiguous. Use session
+   IDs when multiple plugin pairs require them; tolerate a manual session until
+   an operation is actually ambiguous, then fail with an actionable message.
+4. **Keep target switching fluid.** Do not block `diff`/`show` switching by
+   default. Preserve or include changeset context with notes so feedback cannot
+   silently appear to describe the wrong target.
 
-### P1 — make spatial behavior match the action
+### P1 — make common actions predictable
 
-6. **Focus the review's tab, not only its workspace.** The minimal change is
-   `tab focus` using the `tab_id` returned by `pane get`; this at least makes the
-   review layout visible. The stronger long-term fit is a manifest `[[panes]]`
-   entry opened as a managed split, because Herdr then provides absolute
-   `plugin pane focus` and preserves plugin ownership as the pane moves.
-7. **Name the pair in user-facing text.** Action output and any ambiguity message
-   should identify the paired agent and Hunk pane. Once pair state exists,
-   ambiguity should be limited to recovery of legacy or unmanaged state rather
-   than ordinary comment routing.
-8. **Deduplicate identical staging.** Store a digest of the note set and target
-   pane after a successful send. A repeated keypress with unchanged notes should
-   focus the already targeted agent and notify instead of appending the same
-   instruction again. This does not solve collision with an unrelated draft, but
-   it removes the common self-inflicted collision.
+5. **Support the useful shell case.** If review is invoked from a shell and the
+   current tab contains exactly one agent, create or reuse that agent's pair. If
+   several agents are plausible, fail clearly instead of choosing by recency.
+6. **Focus the actual review pane.** For an ordinary pane, at minimum focus its
+   tab using the `tab_id` returned by `pane get`. A manifest `[[panes]]` entry may
+   provide stronger ownership and absolute `plugin pane focus`, but adopting it
+   is an implementation choice rather than a requirement.
+7. **Deduplicate identical staging.** A repeated keypress with unchanged notes
+   should focus the already targeted agent instead of appending the same
+   instruction again.
+8. **Recover stale pairs naturally.** If the paired agent or Hunk pane is gone or
+   replaced, discard that stale relationship and create a new pair on demand.
 
 ### P2 — improve review ergonomics without imposing preferences
 
@@ -181,12 +193,15 @@ Any implementation work following these recommendations should retain the
 existing 81 tests and add end-to-end boundary cases for:
 
 - origin agent and Hunk in different workspaces;
-- two agents in different tabs on the same checkout, each retaining its own Hunk
-  and session ID;
+- two agents in different tabs on the same checkout, each retaining an
+  independent pairing without takeover;
 - same checkout open in two workspaces, with comments from each Hunk returning to
   its paired agent;
 - review pane in a background tab of the active workspace;
-- an unmanaged live Hunk session before first plugin invocation;
+- shell invocation with zero, one, and multiple agents in the current tab;
+- a deliberately moved paired Hunk, verifying focus without automatic movement;
+- an unmanaged live Hunk session before first plugin invocation, both before and
+  after its presence causes genuine Hunk selector ambiguity;
 - user notes present while switching `diff`/`show`;
 - identical `send-comments` invoked twice before submission.
 
