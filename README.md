@@ -167,8 +167,12 @@ The plugin directory is the source; edit and re-invoke, no rebuild.
 
 ```bash
 python3 -m unittest discover -s tests -t .
-ruff check .
+uvx ruff@0.16.2 check .        # the version CI pins
+uvx ruff@0.16.2 format --check .
 ```
+
+CI runs the suite on Linux and macOS against Python 3.9 and 3.13 — the floor the
+README promises and the current release.
 
 Tests drive the script's argv interface as a subprocess against fake `herdr`,
 `hunk`, and `git` executables on `PATH` that record their argv and reply from a

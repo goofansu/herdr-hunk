@@ -54,7 +54,9 @@ class PluginError(Exception):
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(argv, capture_output=True, text=True)
+        # check=False: a nonzero exit is data here, not an exception. Callers
+        # read returncode to tell "no live session" from "command failed".
+        return subprocess.run(argv, capture_output=True, text=True, check=False)
     except OSError as error:
         raise PluginError(f"could not run {argv[0]}: {error}") from error
 

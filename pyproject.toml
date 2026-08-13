@@ -1,0 +1,7 @@
+# Tooling config only. The plugin itself is standard library and is not packaged
+# or installed — Herdr runs `herdr_hunk.py` straight out of the plugin directory.
+
+[tool.ruff]
+# The floor the README promises and CI exercises. Lets ruff catch syntax or APIs
+# that would only work on a newer interpreter than a user is required to have.
+target-version = "py39"

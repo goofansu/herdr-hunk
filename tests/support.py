@@ -295,6 +295,7 @@ class PluginTestCase(unittest.TestCase):
             text=True,
             env=env,
             cwd=self.tmp,
+            check=False,
         )
 
     # -- assertions ----------------------------------------------------------
