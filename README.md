@@ -1,10 +1,6 @@
-# Hunk Review — a Herdr plugin
+# herd-hunk
 
-Review the changes an agent made, in Hunk, beside the pane that made them. When
-an agent commits its work, `hunk diff` in that worktree shows nothing; this
-plugin resolves the base to compare against so committed and uncommitted work
-appear together, reuses one review pane per checkout, and sends your review notes
-back to the agent that wrote the code.
+Review the changes an agent made, in Hunk, beside the pane that made them. 
 
 ## Requirements
 
