@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+  local label=$1
+  shift
+  printf '==> %s\n' "$label"
+  time "$@"
+}
+
+install_system_packages() {
+  local -a packages=()
+
+  command -v python3 >/dev/null 2>&1 || packages+=(python3)
+  python3 -m pip --version >/dev/null 2>&1 || packages+=(python3-pip)
+  command -v git >/dev/null 2>&1 || packages+=(git)
+  command -v npm >/dev/null 2>&1 || packages+=(npm)
+
+  if ((${#packages[@]} == 0)); then
+    printf 'System packages are already installed\n'
+    return
+  fi
+
+  apt-get update
+  apt-get install -y "${packages[@]}"
+}
+
+check_python() {
+  python3 - <<'PY'
+import sys
+
+if sys.version_info < (3, 9):
+    raise SystemExit("Python 3.9 or newer is required")
+PY
+}
+
+install_ruff() {
+  if command -v ruff >/dev/null 2>&1 && [[ $(ruff --version) == "ruff 0.16.2" ]]; then
+    printf 'ruff 0.16.2 is already installed\n'
+    return
+  fi
+
+  python3 -m pip install --user --disable-pip-version-check ruff==0.16.2
+}
+
+install_hunk() {
+  if command -v hunk >/dev/null 2>&1; then
+    printf 'Hunk is already installed\n'
+    return
+  fi
+
+  npm install --global hunkdiff
+}
+
+step "Install system packages" install_system_packages
+step "Check Python" check_python
+step "Check Git" git --version
+step "Install Ruff" install_ruff
+step "Install Hunk" install_hunk
+step "Run unit tests" python3 -m unittest discover -s tests -t .
+
+printf 'Orb setup complete.\n'

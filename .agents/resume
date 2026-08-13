@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command -v python3 >/dev/null
+command -v git >/dev/null
+command -v ruff >/dev/null
+command -v hunk >/dev/null
+
+printf 'Orb development tools are available.\n'
