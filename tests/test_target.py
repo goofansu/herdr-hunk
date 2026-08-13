@@ -130,7 +130,7 @@ class CheckoutResolutionTest(PluginTestCase):
             ["git", "-C", spaced, "rev-parse", "--show-toplevel"], self.calls("git")
         )
         self.assertIn(spaced, self.calls_matching("herdr", "split")[0])
-        self.assertEqual(self.pane_map(), {spaced: "w1:p9"})
+        self.assertEqual(self.review_panes(), {spaced: "w1:p9"})
 
     def test_workspace_cwd_is_used_when_the_pane_has_no_cwd(self) -> None:
         self.stub_checkout()

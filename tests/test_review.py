@@ -43,7 +43,24 @@ class OpenReviewTest(PluginTestCase):
 
     def test_the_new_pane_id_is_recorded_against_the_checkout(self) -> None:
         self.run_plugin("review", self.context())
-        self.assertEqual(self.pane_map(), {self.checkout: "w1:p9"})
+        self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
+
+    def test_the_pane_the_review_was_split_from_is_recorded(self) -> None:
+        """send-comments needs it to know which agent produced the code."""
+        self.run_plugin("review", self.context(focused_pane_id="w1:p4"))
+        self.assertEqual(
+            self.pane_map(),
+            {self.checkout: {"review_pane": "w1:p9", "origin_pane": "w1:p4"}},
+        )
+
+    def test_a_legacy_single_pane_state_file_is_still_reused(self) -> None:
+        self.write_pane_map({self.checkout: "w1:p9"})
+        self.stub_live_pane("w1:p9")
+        self.stub_live_session(True)
+        result = self.run_plugin("review", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
+        self.assertEqual(self.calls_matching("herdr", "split"), [])
 
     def test_a_split_that_reports_no_pane_id_fails_without_running_hunk(self) -> None:
         self.rules = []
@@ -177,7 +194,7 @@ class ReuseReviewTest(PluginTestCase):
 
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 2)
-        self.assertEqual(self.pane_map(), {self.checkout: "w1:p9"})
+        self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
 
     def test_every_reload_passes_watch(self) -> None:
         self.seed_pane_map(self.checkout, "w1:p9")

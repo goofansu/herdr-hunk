@@ -171,11 +171,20 @@ class PluginTestCase(unittest.TestCase):
                 exit_code=1,
             )
 
-    def seed_pane_map(self, checkout: str, pane_id: str) -> None:
+    def seed_pane_map(
+        self, checkout: str, pane_id: str, origin: str | None = None
+    ) -> None:
+        record = {"review_pane": pane_id}
+        if origin:
+            record["origin_pane"] = origin
+        self.write_pane_map({checkout: record})
+
+    def write_pane_map(self, entries: dict) -> None:
+        """Write the state file verbatim, including legacy shapes."""
         with open(
             os.path.join(self.state_dir, "review-panes.json"), "w", encoding="utf-8"
-        ) as f:
-            json.dump({checkout: pane_id}, f)
+        ) as handle:
+            json.dump(entries, handle)
 
     # -- invocation ----------------------------------------------------------
 
@@ -250,6 +259,13 @@ class PluginTestCase(unittest.TestCase):
             for call in self.calls(program)
             if all(token in call for token in tokens)
         ]
+
+    def review_panes(self) -> dict:
+        """``checkout -> review pane id``, dropping the rest of each record."""
+        return {
+            checkout: record["review_pane"]
+            for checkout, record in self.pane_map().items()
+        }
 
     def pane_map(self) -> dict:
         path = os.path.join(self.state_dir, "review-panes.json")

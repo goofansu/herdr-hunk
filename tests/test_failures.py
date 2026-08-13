@@ -66,7 +66,7 @@ class HerdrFailureTest(PluginTestCase):
         result = self.run_plugin("review", self.context())
         self.assertFailed(result, "reload failed")
         self.assertEqual(self.calls_matching("herdr", "split"), [])
-        self.assertEqual(self.pane_map(), {self.checkout: "w1:p9"})
+        self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
 
     def test_a_failed_pane_list_is_surfaced(self) -> None:
         self.rule(
@@ -155,7 +155,7 @@ class StateDirTest(PluginTestCase):
             handle.write("{oops")
         result = self.run_plugin("review", self.context())
         self.assertSucceeded(result)
-        self.assertEqual(self.pane_map(), {self.checkout: "w1:p9"})
+        self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
 
 
 if __name__ == "__main__":

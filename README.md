@@ -85,7 +85,9 @@ plugin does not override preferences you set deliberately.
 ## Reuse
 
 Repeated invocation is the normal case for a keybound action, so the plugin keeps
-a `checkout -> pane_id` map under `HERDR_PLUGIN_STATE_DIR`. When both the pane
+a `checkout -> {review pane, origin pane}` map under `HERDR_PLUGIN_STATE_DIR`.
+The origin pane is the one the review was split from, which is what
+`send-comments` uses to find the right agent. When both the pane
 and the Hunk session are still live it reloads that session in place and brings
 its workspace into view; otherwise it splits a fresh pane. A stale map entry is
 expected and treated as absent.
@@ -104,9 +106,27 @@ does not append Enter, but embedded newlines *are* delivered as Enter and would
 submit line by line, which is why the instruction is one line and points at a
 file instead of pasting the notes.
 
-The agent pane is found by scanning `herdr pane list --workspace` for a pane with
-an agent, excluding the known review pane. The focused pane is not assumed to be
-the agent: a worktree workspace's root pane is an ordinary shell.
+Once staged, the agent pane is focused with `herdr agent focus` — the text is
+waiting for you to accept or edit, so the plugin puts you in front of it. A
+failure to focus is reported but does not fail the action: the notes are already
+staged, and work that happened must not be reported as work that didn't.
+
+### Which agent gets the notes
+
+A workspace can hold several agents, and sending your review notes to the wrong
+one is worse than not sending them. The plugin resolves the target in order and
+**never guesses between candidates**:
+
+1. The pane the review was split from — recorded at `review` time, and the
+   definition of "the agent that produced this code".
+2. Otherwise the invoking pane, if you ran `send-comments` from the agent itself.
+3. Otherwise the single agent pane in the workspace, if there is exactly one.
+4. Otherwise it fails, naming the candidates.
+
+Every pane this plugin has opened for Hunk is excluded at each step, across all
+checkouts. The focused pane is never *assumed* to be the agent: a worktree
+workspace's root pane is an ordinary shell, and the pane you invoke from is
+usually the review itself.
 
 ## Development
 

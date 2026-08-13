@@ -202,7 +202,11 @@ def state_dir() -> str:
     return directory
 
 
-def load_pane_map() -> dict:
+def load_reviews() -> dict:
+    """``checkout -> {"review_pane": id, "origin_pane": id}``, stale entries included.
+
+    A bare string value is the older single-pane format and still reads.
+    """
     path = os.path.join(state_dir(), PANE_MAP_FILE)
     try:
         with open(path, encoding="utf-8") as handle:
@@ -211,13 +215,24 @@ def load_pane_map() -> dict:
         return {}
     if not isinstance(entries, dict):
         return {}
-    return {key: value for key, value in entries.items() if isinstance(value, str)}
+    reviews = {}
+    for checkout, record in entries.items():
+        if isinstance(record, str):
+            reviews[checkout] = {"review_pane": record}
+        elif isinstance(record, dict) and isinstance(record.get("review_pane"), str):
+            reviews[checkout] = record
+    return reviews
 
 
-def save_pane_map(entries: dict) -> None:
+def save_reviews(reviews: dict) -> None:
     path = os.path.join(state_dir(), PANE_MAP_FILE)
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(entries, handle, indent=2, sort_keys=True)
+        json.dump(reviews, handle, indent=2, sort_keys=True)
+
+
+def review_pane_ids(reviews: dict) -> set[str]:
+    """Every pane this plugin opened for Hunk, across all checkouts."""
+    return {record["review_pane"] for record in reviews.values()}
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +293,11 @@ def action_review(action: str) -> int:
     context = read_context()
     invoking_pane = invoking_pane_id(context)
     require_hunk()
-    panes = load_pane_map()
+    reviews = load_reviews()
     checkout = resolve_checkout(start_directory(context))
     target = ["show"] if action == "review-commit" else diff_target(context, checkout)
 
-    recorded = panes.get(checkout)
+    recorded = reviews.get(checkout, {}).get("review_pane")
     review_pane = get_pane(recorded) if recorded else None
     if review_pane and session_is_live(checkout):
         reload_session(checkout, target)
@@ -295,8 +310,10 @@ def action_review(action: str) -> int:
         return 0
 
     pane_id = open_review_pane(invoking_pane, checkout, target)
-    panes[checkout] = pane_id
-    save_pane_map(panes)
+    # The pane the review was split from is the one that produced the code, which
+    # is what send-comments needs when a workspace holds more than one agent.
+    reviews[checkout] = {"review_pane": pane_id, "origin_pane": invoking_pane}
+    save_reviews(reviews)
     print(f"opened Hunk review in {pane_id}: {' '.join(target)}")
     return 0
 
@@ -358,18 +375,44 @@ def notes_path(checkout: str) -> str:
     return os.path.join(directory, f"{safe}-{digest}.md")
 
 
-def find_agent_pane(workspace: str, exclude: set[str]) -> str:
-    """The first pane running an agent, never a pane this plugin opened for Hunk."""
+def find_agent_pane(
+    workspace: str, context: dict, record: dict, review_panes: set[str]
+) -> str:
+    """The agent pane that produced the code — never a guess between candidates.
+
+    A workspace can hold several agents, and sending someone's review notes to the
+    wrong one is worse than not sending them, so an unresolved tie is an error.
+    """
     listing = herdr_json(["pane", "list", "--workspace", workspace])
     panes = listing.get("panes")
     if not isinstance(panes, list):
         raise PluginError("herdr pane list returned an unexpected response shape")
-    for pane in panes:
-        if not isinstance(pane, dict) or pane.get("pane_id") in exclude:
-            continue
-        if pane.get("agent"):
-            return str(pane["pane_id"])
-    raise PluginError(f"no agent pane in workspace {workspace}")
+    agents = {
+        pane["pane_id"]: pane
+        for pane in panes
+        if isinstance(pane, dict)
+        and isinstance(pane.get("pane_id"), str)
+        and pane.get("agent")
+        and pane["pane_id"] not in review_panes
+    }
+
+    # The pane this checkout's review was opened beside.
+    origin = record.get("origin_pane")
+    if isinstance(origin, str) and origin in agents:
+        return origin
+    # Failing that, the invoking pane, when send-comments is fired from the agent.
+    invoking = _text(context, "focused_pane_id")
+    if invoking and invoking in agents:
+        return invoking
+    if len(agents) == 1:
+        return next(iter(agents))
+    if not agents:
+        raise PluginError(f"no agent pane in workspace {workspace}")
+    raise PluginError(
+        f"{len(agents)} agent panes in workspace {workspace} "
+        f"({', '.join(sorted(agents))}) and no way to tell which wrote this code; "
+        "open the review with this plugin, or run send-comments from the agent pane"
+    )
 
 
 def action_send_comments() -> int:
@@ -388,7 +431,10 @@ def action_send_comments() -> int:
 
     # Exclude every review pane this plugin knows about, not just this checkout's:
     # a pane recorded under another key is still Hunk, and must never be the target.
-    agent_pane = find_agent_pane(workspace, exclude=set(load_pane_map().values()))
+    reviews = load_reviews()
+    agent_pane = find_agent_pane(
+        workspace, context, reviews.get(checkout, {}), review_pane_ids(reviews)
+    )
 
     # One line: send-text delivers embedded newlines as Enter, which would submit
     # the message line by line into the agent's terminal.
@@ -397,6 +443,17 @@ def action_send_comments() -> int:
         "the file lists every note by file and line."
     )
     herdr(["pane", "send-text", agent_pane, instruction])
+
+    # The text is staged, not submitted, so put the user in front of it to decide.
+    # Best effort: the notes are already staged, and a failure to focus must not
+    # report the action as failed when the work it was asked to do happened.
+    focus = _run([herdr_bin(), "agent", "focus", agent_pane])
+    if focus.returncode != 0:
+        print(
+            f"herdr-hunk: could not focus {agent_pane}: {_diagnostic(focus)}",
+            file=sys.stderr,
+        )
+
     print(f"staged {len(notes)} review note(s) in {agent_pane} via {path}")
     return 0
 

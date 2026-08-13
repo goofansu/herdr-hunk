@@ -145,6 +145,74 @@ class SendCommentsTest(PluginTestCase):
         self.assertSucceeded(result)
         self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p2")
 
+    def test_the_agent_pane_is_focused_after_the_text_is_staged(self) -> None:
+        self.run_plugin("send-comments", self.context())
+        self.assertEqual(
+            self.calls_matching("herdr", "agent", "focus"),
+            [["herdr", "agent", "focus", "w1:p2"]],
+        )
+
+    def test_staged_notes_are_not_reported_as_failed_when_focus_fails(self) -> None:
+        self.rule("herdr", ["agent", "focus"], stderr="agent_not_found\n", exit_code=1)
+        result = self.run_plugin("send-comments", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(len(self.calls_matching("herdr", "send-text")), 1)
+        self.assertIn("could not focus", result.stderr)
+
+    def test_the_pane_the_review_was_opened_beside_wins(self) -> None:
+        """Two agents in one workspace: the review's origin pane wrote this code."""
+        self.restub(
+            panes=[
+                pane_info("w1:p2", agent="claude", agent_status="idle"),
+                pane_info("w1:p7", agent="pi", agent_status="idle"),
+            ]
+        )
+        self.seed_pane_map(self.checkout, "w1:p9", origin="w1:p7")
+        result = self.run_plugin("send-comments", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p7")
+
+    def test_the_invoking_agent_pane_wins_when_no_origin_was_recorded(self) -> None:
+        self.restub(
+            panes=[
+                pane_info("w1:p2", agent="claude", agent_status="idle"),
+                pane_info("w1:p7", agent="pi", agent_status="idle"),
+            ]
+        )
+        result = self.run_plugin("send-comments", self.context(focused_pane_id="w1:p7"))
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p7")
+
+    def test_two_agent_panes_with_no_hint_fails_rather_than_guessing(self) -> None:
+        self.restub(
+            panes=[
+                pane_info("w1:p2", agent="claude", agent_status="idle"),
+                pane_info("w1:p7", agent="pi", agent_status="idle"),
+            ]
+        )
+        result = self.run_plugin("send-comments", self.context())
+        self.assertFailed(result, "2 agent panes", "w1:p2", "w1:p7")
+        self.assertEqual(self.calls_matching("herdr", "send-text"), [])
+        self.assertEqual(self.calls_matching("herdr", "agent", "focus"), [])
+
+    def test_a_stale_origin_pane_falls_back_to_the_only_agent(self) -> None:
+        self.seed_pane_map(self.checkout, "w1:p9", origin="w1:pGONE")
+        result = self.run_plugin("send-comments", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p2")
+
+    def test_an_origin_pane_that_is_now_hunk_is_never_targeted(self) -> None:
+        self.restub(
+            panes=[
+                pane_info("w1:p9", agent="hunk", agent_status="idle"),
+                pane_info("w1:p2", agent="claude", agent_status="idle"),
+            ]
+        )
+        self.seed_pane_map(self.checkout, "w1:p9", origin="w1:p9")
+        result = self.run_plugin("send-comments", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p2")
+
     def test_a_workspace_with_no_agent_pane_fails_without_sending(self) -> None:
         self.restub(panes=[pane_info("w1:p1"), pane_info("w1:p9")])
         result = self.run_plugin("send-comments", self.context())
