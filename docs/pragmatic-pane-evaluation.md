@@ -23,13 +23,26 @@ Herdr itself was not installed in the orb. Layout/focus conclusions therefore
 come from Herdr's documented contract rather than a live Herdr screen. Hunk UI
 and session conclusions are live observations.
 
+## Product invariant
+
+The maintainer clarified the goal after the initial evaluation:
+
+> A Hunk pane is the agent's copilot in the current tab.
+
+Accordingly, the expected ownership unit is an **agent–Hunk pair**, not a
+checkout-global review. Opening or reusing a review from an agent should leave
+that agent's Hunk in the same tab, and sending comments from that Hunk should
+have one deterministic destination: its paired agent. Findings below that
+describe checkout-global behavior are implementation gaps, not acceptable
+alternative semantics.
+
 ## Combination results
 
 | Arrangement/action | Observed result | Practical verdict |
 | --- | --- | --- |
 | One agent opens one plugin review beside itself | Hunk is split right, focused, watched, remembered, and comments route to that agent. | Clear happy path. |
 | Same agent invokes either review action repeatedly | The pane count stays fixed and the session reloads. | Good; safe for a keybinding. |
-| Two agents share a checkout and the second opens/reuses the review | One shared Hunk pane is retargeted and `origin_pane` changes to the second agent. Comments route to the latest caller. | Coherent if users understand that the review is checkout-global, not agent-owned. |
+| Two agents share a checkout and the second opens/reuses the review | One shared Hunk pane is retargeted and `origin_pane` changes to the second agent. Comments route to the latest caller. | Violates the copilot model: the second agent takes over the first agent's Hunk instead of getting/reusing its own paired pane. |
 | Two equally plausible agents, no remembered origin | The most recently state-changing agent receives staged text; a toast names the other candidate. | Visible recovery, but lifecycle recency is not authorship. |
 | Hunk is in another tab in the same workspace | Reuse calls only `workspace focus`. Herdr documents separate `tab focus`; workspace focus does not identify the review tab or pane. | Review can reload successfully while remaining hidden. |
 | Hunk is moved into a review-only workspace | Review reuse can still address the old pane ID because Herdr retains moved-pane aliases, but `send-comments` from Hunk searches only its current workspace and finds no agent. | Sending from the natural place—the completed review—fails. |
@@ -46,11 +59,10 @@ and session conclusions are live observations.
 
 ### 1. “Beside this agent” becomes “one movable review for this checkout”
 
-The first invocation creates a strong spatial association: agent on the left,
-its review on the right. The state model does not preserve that association.
+The first invocation creates the intended association: agent on the left, its
+Hunk copilot on the right. The state model does not preserve that association.
 Another agent, tab, or workspace using the same checkout takes over the review
-and becomes its origin. That is a valid resource model, but it conflicts with the
-action description and the user's spatial mental model.
+and becomes its origin. This conflicts directly with the product invariant.
 
 The mismatch is most harmful across workspaces: the review remains physically in
 one workspace, attribution moves to another, and comment discovery is scoped back
@@ -100,36 +112,47 @@ and Herdr provides zoom—but the initial layout optimizes “beside” more tha
 
 ### P0 — prevent wrong or stranded handoffs
 
-1. **Resolve the remembered origin globally before workspace-local fallback.**
-   Ask Herdr whether `origin_pane` still hosts an agent even when it is outside
-   the invoking workspace, and stage there if valid. Only use the existing
-   same-tab/checkout/workspace heuristic when no valid origin exists. This is the
-   smallest fix for moved review panes and same-checkout multi-workspace routing.
-2. **Refuse to create an unmanaged duplicate Hunk session.** Before opening a
-   pane with no usable record, inspect Hunk sessions for the checkout. If one
-   already exists and cannot be unambiguously correlated to a Herdr pane, fail
+1. **Make the agent–Hunk pair the persisted identity.** Key review records by a
+   stable agent-pane identity (including its tab/workspace context), not only by
+   checkout. Store the paired Hunk pane and Hunk session ID in that record.
+   Invoking a review from the agent must create or reuse that pair in the current
+   tab; invoking from Hunk must route comments directly to the paired agent. Do
+   not use workspace-wide recency heuristics for a known pair.
+2. **Address Hunk sessions by stored session ID.** Multiple agents can work in
+   separate tabs on the same checkout, so each can have a Hunk copilot. Real Hunk
+   permits those sessions, but `--repo` becomes ambiguous. Session get, reload,
+   and comment operations must therefore use the pair's session ID. Pane launch
+   needs a bounded registration step that identifies and persists the new
+   session rather than assuming repository uniqueness.
+3. **Restore pair colocation when it drifts.** If a paired Hunk was manually moved
+   away, a review action should move it back beside its agent (persisting the new
+   pane ID returned by cross-workspace moves), or fail explicitly if restoring
+   the pair is unsafe. Merely focusing the Hunk's current workspace does not meet
+   the goal.
+4. **Refuse unmanaged duplicate Hunk sessions.** Before opening a new paired pane
+   with no usable record, inspect Hunk sessions for the checkout. If one already
+   exists and cannot be unambiguously correlated to a Herdr pane, fail
    with an actionable “close or adopt the existing Hunk review” message. Do not
-   split first. Correlating Hunk's PID to a pane process and adopting it would be
-   nicer, but refusal is smaller and safer.
-3. **Guard target changes when user notes exist.** Read the current Hunk input
+   split first. Existing sessions belonging to other recorded agent–Hunk pairs
+   are expected and are distinguished by session ID; only unmanaged sessions are
+   a conflict.
+5. **Guard target changes when user notes exist.** Read the current Hunk input
    kind and user-note count before changing `diff` to `show` or vice versa. If
    notes exist, keep the current target and ask the user to send/remove them
-   first. Separate sessions are not the pragmatic first fix because every Hunk
-   operation would need a stored session ID and a way to choose which session's
-   comments to send.
+   first within that pair.
 
 ### P1 — make spatial behavior match the action
 
-4. **Focus the review's tab, not only its workspace.** The minimal change is
+6. **Focus the review's tab, not only its workspace.** The minimal change is
    `tab focus` using the `tab_id` returned by `pane get`; this at least makes the
    review layout visible. The stronger long-term fit is a manifest `[[panes]]`
    entry opened as a managed split, because Herdr then provides absolute
    `plugin pane focus` and preserves plugin ownership as the pane moves.
-5. **Name the resource model in user-facing text.** If one review per checkout is
-   retained, action output/toasts should say “checkout review” and identify when
-   it moved focus away from another agent/workspace. Avoid implying durable
-   one-agent/one-Hunk pairing.
-6. **Deduplicate identical staging.** Store a digest of the note set and target
+7. **Name the pair in user-facing text.** Action output and any ambiguity message
+   should identify the paired agent and Hunk pane. Once pair state exists,
+   ambiguity should be limited to recovery of legacy or unmanaged state rather
+   than ordinary comment routing.
+8. **Deduplicate identical staging.** Store a digest of the note set and target
    pane after a successful send. A repeated keypress with unchanged notes should
    focus the already targeted agent and notify instead of appending the same
    instruction again. This does not solve collision with an unrelated draft, but
@@ -137,16 +160,16 @@ and Herdr provides zoom—but the initial layout optimizes “beside” more tha
 
 ### P2 — improve review ergonomics without imposing preferences
 
-7. **Keep Hunk's `auto` mode and user rendering settings.** The live width tests
+9. **Keep Hunk's `auto` mode and user rendering settings.** The live width tests
    confirm that forcing split mode would be worse in common half-width panes.
-8. **Document zoom/wrap as the intended narrow-pane escape hatch.** A short usage
+10. **Document zoom/wrap as the intended narrow-pane escape hatch.** A short usage
    note is cheaper and less surprising than forcing `--wrap` (which can consume
    substantial vertical space) or silently opening a different placement.
-9. **Consider a separate “open full review” action only after real user demand.**
+11. **Consider a separate “open full review” action only after real user demand.**
    A managed tab/zoomed pane would improve long-line review, but adding layout
    choices now increases concepts and keybindings. Fix routing, visibility, and
    note-target integrity first.
-10. **Treat the clean-review message as upstream Hunk UX.** The plugin launches
+12. **Treat the clean-review message as upstream Hunk UX.** The plugin launches
     watched empty reviews intentionally, including while an agent is about to
     write changes. Hunk could say “No changes yet; watching…” when no filter is
     active. The plugin should not preflight and skip the pane, because that would
@@ -158,7 +181,10 @@ Any implementation work following these recommendations should retain the
 existing 81 tests and add end-to-end boundary cases for:
 
 - origin agent and Hunk in different workspaces;
-- same checkout open in two workspaces, with comments fired from Hunk;
+- two agents in different tabs on the same checkout, each retaining its own Hunk
+  and session ID;
+- same checkout open in two workspaces, with comments from each Hunk returning to
+  its paired agent;
 - review pane in a background tab of the active workspace;
 - an unmanaged live Hunk session before first plugin invocation;
 - user notes present while switching `diff`/`show`;

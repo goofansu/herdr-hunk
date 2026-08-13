@@ -15,6 +15,19 @@ it diverges from this document.
   its CLI.
 - **Git** resolves the checkout and, for linked worktrees, the changeset base.
 
+### Product goal versus current behavior
+
+The product goal, clarified by the maintainer on 2026-08-13, is:
+
+> A Hunk pane is the agent's copilot in the current tab.
+
+The intended unit is therefore an **agent–Hunk pair**, with the Hunk pane in the
+agent's tab and review comments returning to that agent. The current
+implementation only establishes this pair on first open. Its persisted identity
+is the checkout path, so later invocations can reuse the same Hunk from another
+tab or workspace and repoint its remembered origin to another agent. Treat that
+as an implementation gap, not the desired product model.
+
 The plugin is one standard-library Python script, `herdr_hunk.py`. Herdr runs it
 directly from the plugin directory; there is no package, daemon, build artifact,
 or install step owned by this repository. `herdr-plugin.toml` declares three
@@ -183,7 +196,8 @@ again.
 ## Important invariants and limitations
 
 - Pane reuse is keyed by checkout, not by workspace, tab, agent, or review type.
-  One checkout cannot retain separate `diff` and `show` panes through this plugin.
+  This conflicts with the intended agent–Hunk pairing. One checkout cannot retain
+  separate copilot panes for agents in different tabs through this plugin.
 - A review pane may move to another workspace; reuse follows and focuses it there.
 - State is plugin-global, while comment agent discovery is restricted to the
   invoking workspace. A remembered origin in another workspace is not eligible.
