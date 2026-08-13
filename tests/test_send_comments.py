@@ -39,7 +39,14 @@ class SendCommentsTest(PluginTestCase):
         self.restub()
 
     def restub(self, panes=None, checkout=None, **note_reply) -> None:
-        """Reset the rule table: checkout, note listing, and pane listing."""
+        """Replace the rule table with the three replies a send-comments run needs.
+
+        Rules are first-match-wins and setUp has already installed defaults, so a
+        test wanting a different reply must clear the table rather than append to
+        it. ``note_reply`` is passed straight to the note listing rule, which is
+        what lets one helper cover both a different set of notes (``stdout=``) and
+        a dead session (``stderr=``, ``exit_code=1``).
+        """
         self.rules = []
         self.stub_checkout(toplevel=checkout)
         self.rule(

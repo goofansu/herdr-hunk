@@ -25,10 +25,15 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 PANE_MAP_FILE = "review-panes.json"
 NOTES_DIR = "notes"
 HUNK_INSTALL_HINT = "npm install -g hunkdiff"
+
+# How long to let a just-launched Hunk register with its daemon before giving up.
+SESSION_WAIT_ATTEMPTS = 6
+SESSION_WAIT_SECONDS = 0.25
 
 USAGE = "usage: herdr_hunk.py (review | review-commit | send-comments)"
 
@@ -253,12 +258,62 @@ def session_is_live(checkout: str) -> bool:
     return hunk(["session", "get", "--repo", checkout]).returncode == 0
 
 
+def wait_for_session(checkout: str) -> bool:
+    """Poll briefly for a session that is still registering with Hunk's daemon.
+
+    A pane launched moments ago has a running Hunk that the daemon does not know
+    about yet. Treating that as "no session" splits a second pane over the first,
+    which is how a keybound action shreds a layout.
+    """
+    for attempt in range(SESSION_WAIT_ATTEMPTS):
+        if attempt:
+            time.sleep(SESSION_WAIT_SECONDS)
+        if session_is_live(checkout):
+            return True
+    return False
+
+
 def reload_session(checkout: str, target: list[str]) -> None:
     # --watch on every reload: a reload drops watch mode, and under reuse-by-default
     # the reload path is the common one, so omitting it freezes the review.
     result = hunk(["session", "reload", "--repo", checkout, "--", *target, "--watch"])
     if result.returncode != 0:
         raise PluginError(f"hunk session reload failed: {_diagnostic(result)}")
+
+
+def launch_hunk(pane_id: str, target: list[str]) -> None:
+    command = ["hunk", *target, "--watch"]
+    herdr(["pane", "run", pane_id, *(shlex.quote(word) for word in command)])
+
+
+def pane_process_info(pane_id: str) -> dict | None:
+    result = _run([herdr_bin(), "pane", "process-info", "--pane", pane_id])
+    if result.returncode != 0:
+        return None
+    info = (response_result(result.stdout) or {}).get("process_info")
+    return info if isinstance(info, dict) else None
+
+
+def pane_is_idle_shell(pane_id: str) -> bool:
+    """Whether the pane is back at its own prompt with nothing in the foreground.
+
+    True of a review pane whose Hunk has exited, which is a pane this plugin can
+    reuse rather than abandon.
+    """
+    info = pane_process_info(pane_id) or {}
+    shell = info.get("shell_pid")
+    return isinstance(shell, int) and shell == info.get("foreground_process_group_id")
+
+
+def pane_is_running_hunk(pane_id: str) -> bool:
+    info = pane_process_info(pane_id) or {}
+    processes = info.get("foreground_processes")
+    if not isinstance(processes, list):
+        return False
+    return any(
+        isinstance(process, dict) and process.get("name") == "hunk"
+        for process in processes
+    )
 
 
 def open_review_pane(invoking_pane: str, checkout: str, target: list[str]) -> str:
@@ -279,14 +334,20 @@ def open_review_pane(invoking_pane: str, checkout: str, target: list[str]) -> st
     if not isinstance(pane_id, str) or not pane_id:
         raise PluginError("herdr pane split did not report a new pane")
 
-    command = ["hunk", *target, "--watch"]
     try:
-        herdr(["pane", "run", pane_id, *(shlex.quote(word) for word in command)])
+        launch_hunk(pane_id, target)
     except PluginError:
         # Leave the layout as we found it rather than stranding an empty pane.
         _run([herdr_bin(), "pane", "close", pane_id])
         raise
     return pane_id
+
+
+def focus_review(review_pane: dict, context: dict) -> None:
+    """Surface the review pane. `pane focus` is directional, so focus its workspace."""
+    workspace = _text(review_pane, "workspace_id") or _text(context, "workspace_id")
+    if workspace:
+        herdr(["workspace", "focus", workspace])
 
 
 def action_review(action: str) -> int:
@@ -299,15 +360,36 @@ def action_review(action: str) -> int:
 
     recorded = reviews.get(checkout, {}).get("review_pane")
     review_pane = get_pane(recorded) if recorded else None
-    if review_pane and session_is_live(checkout):
-        reload_session(checkout, target)
-        # pane focus is directional only, so the review pane is surfaced by
-        # focusing the workspace that holds it.
-        workspace = _text(review_pane, "workspace_id") or _text(context, "workspace_id")
-        if workspace:
-            herdr(["workspace", "focus", workspace])
-        print(f"reloaded Hunk review in {recorded}: {' '.join(target)}")
-        return 0
+    if review_pane:
+        # A pane we already own is reusable unless something else has taken it
+        # over. Splitting a second one is what degrades the layout, so it is the
+        # last resort rather than the answer to every unhealthy session.
+        live = session_is_live(checkout)
+        if not live and pane_is_running_hunk(recorded):
+            live = wait_for_session(checkout)
+            if not live:
+                # Hunk is up but its daemon never answered, so the session cannot
+                # be retargeted. Splitting would stack a second Hunk on the first;
+                # say what is wrong instead and leave the layout alone.
+                focus_review(review_pane, context)
+                raise PluginError(
+                    f"Hunk is running in {recorded} but no session registered for "
+                    f"{checkout}; the Hunk daemon may be unreachable"
+                )
+
+        verb = None
+        if live:
+            reload_session(checkout, target)
+            verb = "reloaded"
+        elif pane_is_idle_shell(recorded):
+            # Hunk exited and left our pane at a prompt: start it again in place.
+            launch_hunk(recorded, target)
+            verb = "relaunched"
+
+        if verb:
+            focus_review(review_pane, context)
+            print(f"{verb} Hunk review in {recorded}: {' '.join(target)}")
+            return 0
 
     pane_id = open_review_pane(invoking_pane, checkout, target)
     # The pane the review was split from is the one that produced the code, which
@@ -436,6 +518,14 @@ def agent_panes(workspace: str, review_panes: set[str]) -> dict:
 
 
 def pane_is_within(pane: dict, checkout: str) -> bool:
+    """Whether a pane is working inside the checkout under review.
+
+    Both directories are resolved, because a worktree can be reached through a
+    symlink and a string compare would miss the match. The separator matters too:
+    a bare prefix test would put ``/repo-backup`` inside ``/repo``. Either the
+    shell's directory or the foreground process's counts, so an agent that has
+    cd'd into a subdirectory still belongs to the checkout it started in.
+    """
     root = os.path.realpath(checkout)
     for key in ("cwd", "foreground_cwd"):
         directory = _text(pane, key)

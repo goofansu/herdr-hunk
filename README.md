@@ -87,10 +87,24 @@ plugin does not override preferences you set deliberately.
 Repeated invocation is the normal case for a keybound action, so the plugin keeps
 a `checkout -> {review pane, origin pane}` map under `HERDR_PLUGIN_STATE_DIR`.
 The origin pane is the one the review was split from, which is what
-`send-comments` uses to find the right agent. When both the pane
-and the Hunk session are still live it reloads that session in place and brings
-its workspace into view; otherwise it splits a fresh pane. A stale map entry is
-expected and treated as absent.
+`send-comments` uses to find the right agent.
+
+A pane the plugin already owns gets reused unless something else has taken it
+over. Splitting is the last resort, not the answer to every unhealthy session:
+
+| recorded pane | Hunk session | what happens |
+| --- | --- | --- |
+| alive | live | reload in place |
+| alive | still registering | wait for it, then reload |
+| alive | Hunk running, daemon silent | focus it and report — never stack a second Hunk |
+| alive | Hunk exited, pane at a shell | relaunch Hunk in that same pane |
+| alive | something else running there | split a new pane |
+| gone | — | split a new pane |
+
+The row that matters most in practice is *Hunk exited, pane at a shell*. Quitting
+Hunk is the normal way to finish a review, and treating that as "unusable" left a
+dead pane behind on every cycle — the exact layout decay the reuse rule exists to
+prevent.
 
 `--watch` is re-passed on **every** reload. A reload drops watch mode from the
 live session, so omitting it would leave a reused pane silently frozen.

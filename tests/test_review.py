@@ -137,10 +137,50 @@ class ReuseReviewTest(PluginTestCase):
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
         self.assertEqual(self.calls_matching("hunk", "reload"), [])
 
-    def test_a_dead_session_opens_a_new_review(self) -> None:
+    def test_a_pane_left_at_a_shell_relaunches_hunk_in_place(self) -> None:
+        """Quitting Hunk must not strand the pane and split another beside it."""
         self.seed_pane_map(self.checkout, "w1:p9")
         self.stub_live_pane("w1:p9")
         self.stub_live_session(False)
+        self.stub_process_info("w1:p9")
+        result = self.run_plugin("review", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "split"), [])
+        run = self.calls_matching("herdr", "run")[0]
+        self.assertEqual(run[:4], ["herdr", "pane", "run", "w1:p9"])
+        self.assertEqual(run[run.index("hunk") :], ["hunk", "diff", "--watch"])
+        self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
+
+    def test_a_hunk_still_registering_is_waited_for_not_duplicated(self) -> None:
+        """A pane opened moments ago has a Hunk the daemon has yet to hear about."""
+        self.seed_pane_map(self.checkout, "w1:p9")
+        self.stub_live_pane("w1:p9")
+        # The session only registers on the third probe.
+        self.rule("hunk", ["session", "get"], stdout="Session: s1\n", after=2)
+        self.rule("hunk", ["session", "get"], stderr="not registered\n", exit_code=1)
+        self.stub_process_info("w1:p9", foreground="hunk")
+        result = self.run_plugin("review", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "split"), [])
+        self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
+        self.assertGreater(len(self.calls_matching("hunk", "session", "get")), 1)
+
+    def test_a_hunk_whose_daemon_never_answers_does_not_stack_a_second(self) -> None:
+        self.seed_pane_map(self.checkout, "w1:p9")
+        self.stub_live_pane("w1:p9")
+        self.stub_live_session(False)
+        self.stub_process_info("w1:p9", foreground="hunk")
+        result = self.run_plugin("review", self.context())
+        self.assertFailed(result, "daemon may be unreachable")
+        self.assertEqual(self.calls_matching("herdr", "split"), [])
+        self.assertEqual(self.calls_matching("herdr", "run"), [])
+
+    def test_a_pane_running_something_else_opens_a_new_review(self) -> None:
+        """Our pane was taken over, so splitting is the only safe move left."""
+        self.seed_pane_map(self.checkout, "w1:p9")
+        self.stub_live_pane("w1:p9")
+        self.stub_live_session(False)
+        self.stub_process_info("w1:p9", foreground="vim")
         result = self.run_plugin("review", self.context())
         self.assertSucceeded(result)
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)

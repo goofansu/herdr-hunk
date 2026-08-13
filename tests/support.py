@@ -46,8 +46,22 @@ def matches(match, argv):
     return True
 
 
+def prior_calls(match):
+    """How many logged calls so far match, including the one in flight."""
+    seen = 0
+    with open(os.environ["FAKE_LOG"], encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                entry = json.loads(line)
+                if entry[0] == PROGRAM and matches(match, entry):
+                    seen += 1
+    return seen
+
+
 for rule in json.loads(os.environ.get("FAKE_RULES", "[]")):
     if rule["program"] == PROGRAM and matches(rule["match"], argv):
+        if prior_calls(rule["match"]) <= rule.get("after", 0):
+            continue
         sys.stdout.write(rule.get("stdout", ""))
         sys.stderr.write(rule.get("stderr", ""))
         sys.exit(rule.get("exit", 0))
@@ -110,8 +124,14 @@ class PluginTestCase(unittest.TestCase):
         stdout: str = "",
         stderr: str = "",
         exit_code: int = 0,
+        after: int = 0,
     ) -> None:
-        """Append a reply rule. Earlier rules win over later ones."""
+        """Append a reply rule. Earlier rules win over later ones.
+
+        ``after`` delays a rule until the program has already been called that
+        many times with a matching argv, which models state that settles — a
+        Hunk session that only registers with its daemon a moment later.
+        """
         self.rules.append(
             {
                 "program": program,
@@ -119,6 +139,7 @@ class PluginTestCase(unittest.TestCase):
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit": exit_code,
+                "after": after,
             }
         )
 
@@ -178,6 +199,27 @@ class PluginTestCase(unittest.TestCase):
         if origin:
             record["origin_pane"] = origin
         self.write_pane_map({checkout: record})
+
+    def stub_process_info(self, pane_id: str, foreground: str | None = None) -> None:
+        """``pane process-info``: idle at the shell, or running ``foreground``."""
+        shell_pid = 100
+        processes = [{"name": "fish", "pid": shell_pid}]
+        pgid = shell_pid
+        if foreground:
+            pgid = shell_pid + 1
+            processes = [{"name": foreground, "pid": pgid}]
+        self.herdr_result(
+            ["process-info", "--pane", pane_id],
+            {
+                "type": "pane_process_info",
+                "process_info": {
+                    "pane_id": pane_id,
+                    "shell_pid": shell_pid,
+                    "foreground_process_group_id": pgid,
+                    "foreground_processes": processes,
+                },
+            },
+        )
 
     def stub_agent_list(self, sequences: dict) -> None:
         """``herdr agent list`` reporting a state-change sequence per pane."""
