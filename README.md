@@ -113,20 +113,29 @@ staged, and work that happened must not be reported as work that didn't.
 
 ### Which agent gets the notes
 
-A workspace can hold several agents, and sending your review notes to the wrong
-one is worse than not sending them. The plugin resolves the target in order and
-**never guesses between candidates**:
+A workspace can hold several agents. The plugin resolves the target in order:
 
 1. The pane the review was split from — recorded at `review` time, and the
    definition of "the agent that produced this code".
 2. Otherwise the invoking pane, if you ran `send-comments` from the agent itself.
-3. Otherwise the single agent pane in the workspace, if there is exactly one.
-4. Otherwise it fails, naming the candidates.
+3. Otherwise the sole agent working in this checkout, in the tab you invoked
+   from. This is the Hunk-opened-by-hand case: you split the review beside the
+   agent, so they share a tab.
+4. Otherwise the sole agent working in this checkout.
+5. Otherwise the sole agent in the workspace.
+6. Otherwise the most recently active of the narrowest candidate set — the agent
+   that moved last is the one that just finished the work you're reviewing.
 
 Every pane this plugin has opened for Hunk is excluded at each step, across all
 checkouts. The focused pane is never *assumed* to be the agent: a worktree
 workspace's root pane is an ordinary shell, and the pane you invoke from is
 usually the review itself.
+
+Only a workspace with no agent at all is an error. When step 6 has to choose, the
+plugin says which agent it picked and which it passed over, as a toast and in the
+command log. It does not refuse: the notes are staged unsubmitted in a pane it
+then focuses, so a wrong pick is sitting in front of you and one keystroke from
+being cleared — whereas refusing strands a review you have already written.
 
 ## Development
 

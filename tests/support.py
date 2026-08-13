@@ -179,6 +179,19 @@ class PluginTestCase(unittest.TestCase):
             record["origin_pane"] = origin
         self.write_pane_map({checkout: record})
 
+    def stub_agent_list(self, sequences: dict) -> None:
+        """``herdr agent list`` reporting a state-change sequence per pane."""
+        self.herdr_result(
+            ["agent", "list"],
+            {
+                "type": "agent_list",
+                "agents": [
+                    {"pane_id": pane_id, "agent": "claude", "state_change_seq": seq}
+                    for pane_id, seq in sequences.items()
+                ],
+            },
+        )
+
     def write_pane_map(self, entries: dict) -> None:
         """Write the state file verbatim, including legacy shapes."""
         with open(

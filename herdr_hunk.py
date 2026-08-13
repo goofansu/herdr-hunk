@@ -376,18 +376,56 @@ def notes_path(checkout: str) -> str:
 
 
 def find_agent_pane(
-    workspace: str, context: dict, record: dict, review_panes: set[str]
-) -> str:
-    """The agent pane that produced the code — never a guess between candidates.
+    workspace: str,
+    context: dict,
+    checkout: str,
+    record: dict,
+    review_panes: set[str],
+) -> tuple[str, list[str]]:
+    """The agent pane that produced the code, and any candidates passed over.
 
-    A workspace can hold several agents, and sending someone's review notes to the
-    wrong one is worse than not sending them, so an unresolved tie is an error.
+    Only an empty workspace is a failure. A wrong pick is staged unsubmitted in a
+    pane the caller then focuses, so it is visible and inert; refusing to act on a
+    review the user has already written is the worse outcome. The job here is
+    therefore to pick well, not to abstain.
     """
+    agents = agent_panes(workspace, review_panes)
+    if not agents:
+        raise PluginError(f"no agent pane in workspace {workspace}")
+
+    # The pane this checkout's review was opened beside.
+    origin = record.get("origin_pane")
+    if isinstance(origin, str) and origin in agents:
+        return origin, []
+    # Failing that, the invoking pane, when send-comments is fired from the agent.
+    invoking = _text(context, "focused_pane_id")
+    if invoking and invoking in agents:
+        return invoking, []
+
+    # Narrow by the strongest signals a pane listing carries. An agent working in
+    # this checkout is a likelier author than one somewhere else, and one sharing
+    # the invoking tab is likelier still — which is the Hunk-opened-by-hand case,
+    # where the review sits beside the agent that produced the code.
+    tab = _text(context, "tab_id")
+    here = [pane for pane in agents.values() if pane_is_within(pane, checkout)]
+    same_tab = [pane for pane in here if _text(pane, "tab_id") == tab]
+    for group in (same_tab, here, list(agents.values())):
+        if len(group) == 1:
+            return group[0]["pane_id"], []
+
+    group = same_tab or here or list(agents.values())
+    candidates = [pane["pane_id"] for pane in group]
+    chosen = most_recently_active(candidates)
+    return chosen, [pane_id for pane_id in candidates if pane_id != chosen]
+
+
+def agent_panes(workspace: str, review_panes: set[str]) -> dict:
+    """Panes in the workspace running an agent, minus any this plugin opened."""
     listing = herdr_json(["pane", "list", "--workspace", workspace])
     panes = listing.get("panes")
     if not isinstance(panes, list):
         raise PluginError("herdr pane list returned an unexpected response shape")
-    agents = {
+    return {
         pane["pane_id"]: pane
         for pane in panes
         if isinstance(pane, dict)
@@ -396,22 +434,57 @@ def find_agent_pane(
         and pane["pane_id"] not in review_panes
     }
 
-    # The pane this checkout's review was opened beside.
-    origin = record.get("origin_pane")
-    if isinstance(origin, str) and origin in agents:
-        return origin
-    # Failing that, the invoking pane, when send-comments is fired from the agent.
-    invoking = _text(context, "focused_pane_id")
-    if invoking and invoking in agents:
-        return invoking
-    if len(agents) == 1:
-        return next(iter(agents))
-    if not agents:
-        raise PluginError(f"no agent pane in workspace {workspace}")
-    raise PluginError(
-        f"{len(agents)} agent panes in workspace {workspace} "
-        f"({', '.join(sorted(agents))}) and no way to tell which wrote this code; "
-        "open the review with this plugin, or run send-comments from the agent pane"
+
+def pane_is_within(pane: dict, checkout: str) -> bool:
+    root = os.path.realpath(checkout)
+    for key in ("cwd", "foreground_cwd"):
+        directory = _text(pane, key)
+        if not directory:
+            continue
+        directory = os.path.realpath(directory)
+        if directory == root or directory.startswith(root + os.sep):
+            return True
+    return False
+
+
+def most_recently_active(candidates: list[str]) -> str:
+    """Of several agents, the one whose lifecycle state changed last.
+
+    The agent that just finished the work being reviewed is the one that moved
+    most recently. Falls back to listing order when the sequence is unavailable.
+    """
+    result = _run([herdr_bin(), "agent", "list"])
+    ranked: dict = {}
+    if result.returncode == 0:
+        agents = (response_result(result.stdout) or {}).get("agents")
+        if isinstance(agents, list):
+            for agent in agents:
+                if isinstance(agent, dict) and isinstance(
+                    agent.get("state_change_seq"), int
+                ):
+                    ranked[agent.get("pane_id")] = agent["state_change_seq"]
+    return max(candidates, key=lambda pane_id: ranked.get(pane_id, -1))
+
+
+def announce_ambiguity(chosen: str, passed_over: list[str]) -> None:
+    """Say which agent was picked when more than one could have been the author.
+
+    Plugin stdout is only visible in the command log, so a toast is what actually
+    reaches the user. Best effort: this is a courtesy, not the work.
+    """
+    others = ", ".join(sorted(passed_over))
+    print(f"herdr-hunk: chose {chosen}; also running: {others}", file=sys.stderr)
+    _run(
+        [
+            herdr_bin(),
+            "notification",
+            "show",
+            "Review notes staged",
+            "--body",
+            f"Staged in {chosen}. Other agents here: {others}.",
+            "--sound",
+            "none",
+        ]
     )
 
 
@@ -432,8 +505,12 @@ def action_send_comments() -> int:
     # Exclude every review pane this plugin knows about, not just this checkout's:
     # a pane recorded under another key is still Hunk, and must never be the target.
     reviews = load_reviews()
-    agent_pane = find_agent_pane(
-        workspace, context, reviews.get(checkout, {}), review_pane_ids(reviews)
+    agent_pane, passed_over = find_agent_pane(
+        workspace,
+        context,
+        checkout,
+        reviews.get(checkout, {}),
+        review_pane_ids(reviews),
     )
 
     # One line: send-text delivers embedded newlines as Enter, which would submit
@@ -443,6 +520,8 @@ def action_send_comments() -> int:
         "the file lists every note by file and line."
     )
     herdr(["pane", "send-text", agent_pane, instruction])
+    if passed_over:
+        announce_ambiguity(agent_pane, passed_over)
 
     # The text is staged, not submitted, so put the user in front of it to decide.
     # Best effort: the notes are already staged, and a failure to focus must not

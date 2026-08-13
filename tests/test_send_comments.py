@@ -183,17 +183,61 @@ class SendCommentsTest(PluginTestCase):
         self.assertSucceeded(result)
         self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p7")
 
-    def test_two_agent_panes_with_no_hint_fails_rather_than_guessing(self) -> None:
+    def test_an_agent_in_the_invoking_tab_beats_one_elsewhere(self) -> None:
+        """Hunk opened by hand sits beside the agent whose code it is showing."""
         self.restub(
             panes=[
-                pane_info("w1:p2", agent="claude", agent_status="idle"),
-                pane_info("w1:p7", agent="pi", agent_status="idle"),
+                pane_info("w1:p2", agent="claude", tab_id="w1:t9", cwd=self.checkout),
+                pane_info("w1:p7", agent="pi", tab_id="w1:t1", cwd=self.checkout),
+            ]
+        )
+        result = self.run_plugin("send-comments", self.context(tab_id="w1:t1"))
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p7")
+
+    def test_an_agent_working_in_this_checkout_beats_one_elsewhere(self) -> None:
+        self.restub(
+            panes=[
+                pane_info("w1:p2", agent="claude", cwd="/somewhere/else"),
+                pane_info("w1:p7", agent="pi", cwd=self.checkout),
             ]
         )
         result = self.run_plugin("send-comments", self.context())
-        self.assertFailed(result, "2 agent panes", "w1:p2", "w1:p7")
-        self.assertEqual(self.calls_matching("herdr", "send-text"), [])
-        self.assertEqual(self.calls_matching("herdr", "agent", "focus"), [])
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p7")
+
+    def test_two_equal_candidates_pick_the_most_recently_active(self) -> None:
+        """Refusing would strand a review the user already wrote; pick, don't abstain."""
+        self.restub(
+            panes=[
+                pane_info("w1:p2", agent="claude", cwd=self.checkout),
+                pane_info("w1:p7", agent="pi", cwd=self.checkout),
+            ]
+        )
+        self.stub_agent_list({"w1:p2": 100, "w1:p7": 900})
+        result = self.run_plugin("send-comments", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "send-text")[0][3], "w1:p7")
+        self.assertEqual(self.calls_matching("herdr", "agent", "focus")[0][3], "w1:p7")
+
+    def test_an_ambiguous_pick_is_announced(self) -> None:
+        self.restub(
+            panes=[
+                pane_info("w1:p2", agent="claude", cwd=self.checkout),
+                pane_info("w1:p7", agent="pi", cwd=self.checkout),
+            ]
+        )
+        self.stub_agent_list({"w1:p2": 100, "w1:p7": 900})
+        result = self.run_plugin("send-comments", self.context())
+        self.assertIn("w1:p2", result.stderr)
+        notification = self.calls_matching("herdr", "notification", "show")
+        self.assertEqual(len(notification), 1)
+        self.assertIn("w1:p2", notification[0][-3])
+
+    def test_an_unambiguous_pick_is_not_announced(self) -> None:
+        result = self.run_plugin("send-comments", self.context())
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "notification"), [])
 
     def test_a_stale_origin_pane_falls_back_to_the_only_agent(self) -> None:
         self.seed_pane_map(self.checkout, "w1:p9", origin="w1:pGONE")
