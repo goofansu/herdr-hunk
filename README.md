@@ -23,8 +23,8 @@ checkout — including each linked worktree of one repository — gets its own.
 
 ## Requirements
 
-Herdr 0.8.0+, Hunk, Git, and Python 3 on the Herdr server's `PATH`. Nothing is
-bundled and there is no build step.
+Herdr 0.8.0+, Hunk, Git, and Python 3.9+ on the Herdr server's `PATH`. Nothing
+is bundled and there is no build step — the plugin is standard library only.
 
 ```bash
 npm install -g hunkdiff
@@ -36,8 +36,18 @@ commands until the server restarts.
 ## Install
 
 ```bash
-herdr plugin link /path/to/herdr-hunk
+herdr plugin install goofansu/herdr-hunk
 herdr plugin action list --plugin herdr-hunk
+```
+
+There are no build commands to run, so what `plugin install` previews is the
+whole of what it will execute: `python3 herdr_hunk.py <action>`.
+
+To hack on it instead, link a working copy — edits take effect on the next
+invocation, with no rebuild or reinstall:
+
+```bash
+herdr plugin link /path/to/herdr-hunk
 ```
 
 Bind the actions in `~/.config/herdr/config.toml`:
