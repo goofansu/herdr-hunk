@@ -22,7 +22,9 @@ class TargetResolutionTest(PluginTestCase):
 
     def test_worktree_with_committed_work_targets_the_merge_base(self) -> None:
         self.stub_merge_base(head="cafe1234", base="beef5678")
-        result = self.run_plugin("review", self.context(worktree=self.worktree()))
+        result = self.run_plugin(
+            "review-changes", self.context(worktree=self.worktree())
+        )
         self.assertSucceeded(result)
         self.assertEqual(self.hunk_command(), ["hunk", "diff", "beef5678", "--watch"])
 
@@ -30,7 +32,7 @@ class TargetResolutionTest(PluginTestCase):
         self,
     ) -> None:
         self.stub_merge_base(head="cafe1234", base="beef5678")
-        self.run_plugin("review", self.context(worktree=self.worktree()))
+        self.run_plugin("review-changes", self.context(worktree=self.worktree()))
         self.assertIn(
             ["git", "-C", self.repo_root, "rev-parse", "HEAD"],
             self.calls("git"),
@@ -43,7 +45,7 @@ class TargetResolutionTest(PluginTestCase):
     def test_worktree_rooted_at_the_repo_reviews_the_working_tree(self) -> None:
         """A workspace whose checkout is the repo itself has no parent to diff against."""
         result = self.run_plugin(
-            "review",
+            "review-changes",
             self.context(
                 worktree=self.worktree(
                     repo_root=self.checkout, is_linked_worktree=False
@@ -54,7 +56,7 @@ class TargetResolutionTest(PluginTestCase):
         self.assertEqual(self.hunk_command(), ["hunk", "diff", "--watch"])
 
     def test_non_worktree_context_reviews_the_working_tree(self) -> None:
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(self.hunk_command(), ["hunk", "diff", "--watch"])
 
@@ -65,7 +67,9 @@ class TargetResolutionTest(PluginTestCase):
             stderr="fatal\n",
             exit_code=128,
         )
-        result = self.run_plugin("review", self.context(worktree=self.worktree()))
+        result = self.run_plugin(
+            "review-changes", self.context(worktree=self.worktree())
+        )
         self.assertSucceeded(result)
         self.assertEqual(self.hunk_command(), ["hunk", "diff", "--watch"])
 
@@ -74,7 +78,9 @@ class TargetResolutionTest(PluginTestCase):
             "git", ["-C", self.repo_root, "rev-parse", "HEAD"], stdout="cafe1234\n"
         )
         self.rule("git", ["merge-base"], stderr="fatal: no merge base\n", exit_code=1)
-        result = self.run_plugin("review", self.context(worktree=self.worktree()))
+        result = self.run_plugin(
+            "review-changes", self.context(worktree=self.worktree())
+        )
         self.assertSucceeded(result)
         self.assertEqual(self.hunk_command(), ["hunk", "diff", "--watch"])
 
@@ -101,7 +107,9 @@ class CheckoutResolutionTest(PluginTestCase):
         nested = os.path.join(self.checkout, "src", "deep")
         os.makedirs(nested)
         self.stub_checkout()
-        result = self.run_plugin("review", self.context(focused_pane_cwd=nested))
+        result = self.run_plugin(
+            "review-changes", self.context(focused_pane_cwd=nested)
+        )
         self.assertSucceeded(result)
         self.assertIn(
             ["git", "-C", nested, "rev-parse", "--show-toplevel"], self.calls("git")
@@ -116,7 +124,7 @@ class CheckoutResolutionTest(PluginTestCase):
             stderr="fatal: not a git repository\n",
             exit_code=128,
         )
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "not a Git repository")
         self.assertEqual(self.calls_matching("herdr", "split"), [])
 
@@ -124,7 +132,9 @@ class CheckoutResolutionTest(PluginTestCase):
         spaced = os.path.join(self.tmp, "my checkout")
         os.makedirs(spaced)
         self.stub_checkout(toplevel=spaced)
-        result = self.run_plugin("review", self.context(focused_pane_cwd=spaced))
+        result = self.run_plugin(
+            "review-changes", self.context(focused_pane_cwd=spaced)
+        )
         self.assertSucceeded(result)
         self.assertIn(
             ["git", "-C", spaced, "rev-parse", "--show-toplevel"], self.calls("git")
@@ -134,7 +144,7 @@ class CheckoutResolutionTest(PluginTestCase):
 
     def test_workspace_cwd_is_used_when_the_pane_has_no_cwd(self) -> None:
         self.stub_checkout()
-        result = self.run_plugin("review", self.context(focused_pane_cwd=None))
+        result = self.run_plugin("review-changes", self.context(focused_pane_cwd=None))
         self.assertSucceeded(result)
         self.assertIn(
             ["git", "-C", self.checkout, "rev-parse", "--show-toplevel"],

@@ -14,7 +14,7 @@ class OpenReviewTest(PluginTestCase):
         self.stub_split("w1:p9")
 
     def test_the_review_pane_is_split_to_the_right_and_focused(self) -> None:
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         split = self.calls_matching("herdr", "split")[0]
         self.assertEqual(
@@ -33,7 +33,7 @@ class OpenReviewTest(PluginTestCase):
         )
 
     def test_hunk_launches_with_watch_and_no_rendering_overrides(self) -> None:
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         run = self.calls_matching("herdr", "run")[0]
         self.assertEqual(run[run.index("hunk") :], ["hunk", "diff", "--watch"])
@@ -42,13 +42,13 @@ class OpenReviewTest(PluginTestCase):
         self.assertNotIn("--mode", run)
 
     def test_the_new_pane_id_is_recorded_against_the_checkout(self) -> None:
-        self.run_plugin("review", self.context())
+        self.run_plugin("review-changes", self.context())
         self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
 
     def test_the_agent_pane_that_asked_for_the_review_is_recorded(self) -> None:
         """send-comments needs it to know which agent produced the code."""
         self.run_plugin(
-            "review",
+            "review-changes",
             self.context(focused_pane_id="w1:p4", focused_pane_agent="claude"),
         )
         self.assertEqual(
@@ -58,14 +58,14 @@ class OpenReviewTest(PluginTestCase):
 
     def test_a_review_opened_from_a_shell_records_no_origin(self) -> None:
         """A worktree's root pane is an ordinary shell, not the code's author."""
-        self.run_plugin("review", self.context(focused_pane_id="w1:p1"))
+        self.run_plugin("review-changes", self.context(focused_pane_id="w1:p1"))
         self.assertEqual(self.pane_map(), {self.checkout: {"review_pane": "w1:p9"}})
 
     def test_a_legacy_single_pane_state_file_is_still_reused(self) -> None:
         self.write_pane_map({self.checkout: "w1:p9"})
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
         self.assertEqual(self.calls_matching("herdr", "split"), [])
@@ -74,7 +74,7 @@ class OpenReviewTest(PluginTestCase):
         self.rules = []
         self.stub_checkout()
         self.herdr_result(["pane", "split"], {"type": "pane_info"})
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "did not report a new pane")
         self.assertEqual(self.calls_matching("herdr", "run"), [])
         self.assertEqual(self.pane_map(), {})
@@ -90,7 +90,7 @@ class ReuseReviewTest(PluginTestCase):
         self.seed_pane_map(self.checkout, "w1:p9")
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
         self.assertEqual(self.calls_matching("herdr", "split"), [])
@@ -100,7 +100,7 @@ class ReuseReviewTest(PluginTestCase):
         self.seed_pane_map(self.checkout, "w2:p9")
         self.stub_live_pane("w2:p9")
         self.stub_live_session(True)
-        self.run_plugin("review", self.context())
+        self.run_plugin("review-changes", self.context())
         self.assertEqual(
             self.calls_matching("herdr", "workspace", "focus"),
             [["herdr", "workspace", "focus", "w2"]],
@@ -115,7 +115,7 @@ class ReuseReviewTest(PluginTestCase):
             {"type": "pane_info", "pane": {"pane_id": "w1:p9", "revision": 1}},
         )
         self.stub_live_session(True)
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(
             self.calls_matching("herdr", "workspace", "focus"),
@@ -130,7 +130,7 @@ class ReuseReviewTest(PluginTestCase):
             {"type": "pane_info", "pane": {"pane_id": "w1:p9", "revision": 1}},
         )
         self.stub_live_session(True)
-        result = self.run_plugin("review", self.context(workspace_id=None))
+        result = self.run_plugin("review-changes", self.context(workspace_id=None))
         self.assertSucceeded(result)
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
         for call in self.calls_matching("herdr", "workspace", "focus"):
@@ -155,7 +155,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_session(False)
         self.stub_process_info("w1:p9")
         result = self.run_plugin(
-            "review",
+            "review-changes",
             self.context(focused_pane_id="w1:pBOTTOM", focused_pane_agent="claude"),
         )
         self.assertSucceeded(result)
@@ -166,7 +166,9 @@ class ReuseReviewTest(PluginTestCase):
         self.seed_pane_map(self.checkout, "w1:p9", origin="w1:pTOP")
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
-        result = self.run_plugin("review", self.context(focused_pane_id="w1:p9"))
+        result = self.run_plugin(
+            "review-changes", self.context(focused_pane_id="w1:p9")
+        )
         self.assertSucceeded(result)
         self.assertEqual(self.pane_map()[self.checkout]["origin_pane"], "w1:pTOP")
 
@@ -174,7 +176,7 @@ class ReuseReviewTest(PluginTestCase):
         self.seed_pane_map(self.checkout, "w1:p9")
         self.stub_live_pane("w1:p9", alive=False)
         self.stub_live_session(True)
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
         self.assertEqual(self.calls_matching("hunk", "reload"), [])
@@ -185,7 +187,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(False)
         self.stub_process_info("w1:p9")
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(self.calls_matching("herdr", "split"), [])
         run = self.calls_matching("herdr", "run")[0]
@@ -201,7 +203,7 @@ class ReuseReviewTest(PluginTestCase):
         self.rule("hunk", ["session", "get"], stdout="Session: s1\n", after=2)
         self.rule("hunk", ["session", "get"], stderr="not registered\n", exit_code=1)
         self.stub_process_info("w1:p9", foreground="hunk")
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(self.calls_matching("herdr", "split"), [])
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
@@ -212,7 +214,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(False)
         self.stub_process_info("w1:p9", foreground="hunk")
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "daemon may be unreachable")
         self.assertEqual(self.calls_matching("herdr", "split"), [])
         self.assertEqual(self.calls_matching("herdr", "run"), [])
@@ -223,7 +225,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(False)
         self.stub_process_info("w1:p9", foreground="vim")
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
         self.assertEqual(self.calls_matching("hunk", "reload"), [])
@@ -232,7 +234,7 @@ class ReuseReviewTest(PluginTestCase):
         self.seed_pane_map("/somewhere/else", "w1:p9")
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
-        self.run_plugin("review", self.context())
+        self.run_plugin("review-changes", self.context())
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
 
     def test_reload_passes_watch_and_targets_the_checkout(self) -> None:
@@ -240,7 +242,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
         self.stub_merge_base(head="cafe1234", base="beef5678")
-        self.run_plugin("review", self.context(worktree=self.worktree()))
+        self.run_plugin("review-changes", self.context(worktree=self.worktree()))
         reload = self.calls_matching("hunk", "reload")[0]
         self.assertEqual(
             reload,
@@ -262,7 +264,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         # First invocation: no live session yet, so it opens.
         self.rule("hunk", ["session", "get"], stderr="no live session\n", exit_code=1)
-        first = self.run_plugin("review", self.context())
+        first = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(first)
 
         # Subsequent invocations see a live session and a live pane.
@@ -272,7 +274,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
         for _ in range(2):
-            self.assertSucceeded(self.run_plugin("review", self.context()))
+            self.assertSucceeded(self.run_plugin("review-changes", self.context()))
 
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 2)
@@ -282,17 +284,17 @@ class ReuseReviewTest(PluginTestCase):
         self.seed_pane_map(self.checkout, "w1:p9")
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
-        for action in ("review", "review-commit", "review"):
+        for action in ("review-changes", "review-commit", "review-changes"):
             self.assertSucceeded(self.run_plugin(action, self.context()))
         reloads = self.calls_matching("hunk", "reload")
         self.assertEqual(len(reloads), 3)
         for reload in reloads:
             self.assertIn("--watch", reload)
 
-    def test_review_and_review_commit_share_one_pane(self) -> None:
+    def test_review_changes_and_review_commit_share_one_pane(self) -> None:
         self.stub_live_pane("w1:p9")
         self.rule("hunk", ["session", "get"], stderr="no live session\n", exit_code=1)
-        self.assertSucceeded(self.run_plugin("review", self.context()))
+        self.assertSucceeded(self.run_plugin("review-changes", self.context()))
 
         self.rules = []
         self.stub_checkout()
@@ -300,7 +302,7 @@ class ReuseReviewTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
         self.assertSucceeded(self.run_plugin("review-commit", self.context()))
-        self.assertSucceeded(self.run_plugin("review", self.context()))
+        self.assertSucceeded(self.run_plugin("review-changes", self.context()))
 
         self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
         targets = [

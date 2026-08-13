@@ -3,9 +3,9 @@
 
 Three actions, all invoked by the Herdr manifest as ``herdr_hunk.py <action>``:
 
-``review``
+``review-changes``
     Resolve the invoking pane's checkout and its correct review target, then
-    open or reuse a single Hunk review pane beside it.
+    open or reuse a single Hunk review pane beside it via ``hunk diff``.
 ``review-commit``
     The same, targeting the most recent commit via ``hunk show``.
 ``send-comments``
@@ -40,7 +40,7 @@ HUNK_INSTALL_HINT = "npm install -g hunkdiff"
 SESSION_WAIT_TIMEOUT = 1.5
 SESSION_POLL_SECONDS = 0.25
 
-USAGE = "usage: herdr_hunk.py (review | review-commit | send-comments)"
+USAGE = "usage: herdr_hunk.py (review-changes | review-commit | send-comments)"
 
 
 class PluginError(Exception):
@@ -671,7 +671,7 @@ def main(argv: list[str]) -> int:
         return 2
     action = argv[0]
     try:
-        if action in ("review", "review-commit"):
+        if action in ("review-changes", "review-commit"):
             return action_review(action)
         if action == "send-comments":
             return action_send_comments()

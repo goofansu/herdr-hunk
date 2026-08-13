@@ -16,11 +16,11 @@ class MissingHunkTest(PluginTestCase):
         self.stub_split("w1:p9")
 
     def test_review_reports_how_to_install_hunk(self) -> None:
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "hunk", "npm install -g hunkdiff")
 
     def test_review_does_not_mutate_the_layout(self) -> None:
-        self.run_plugin("review", self.context())
+        self.run_plugin("review-changes", self.context())
         self.assertEqual(self.calls_matching("herdr", "split"), [])
 
     def test_send_comments_reports_how_to_install_hunk(self) -> None:
@@ -41,7 +41,7 @@ class HerdrFailureTest(PluginTestCase):
             stderr='{"error":"pane_not_found"}\n',
             exit_code=1,
         )
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "pane_not_found")
         self.assertEqual(self.calls_matching("herdr", "run"), [])
         self.assertEqual(self.pane_map(), {})
@@ -51,7 +51,7 @@ class HerdrFailureTest(PluginTestCase):
         self.rule(
             "herdr", ["pane", "run"], stderr='{"error":"pane_busy"}\n', exit_code=1
         )
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "pane_busy")
         self.assertEqual(
             self.calls_matching("herdr", "close"), [["herdr", "pane", "close", "w1:p9"]]
@@ -63,7 +63,7 @@ class HerdrFailureTest(PluginTestCase):
         self.stub_live_pane("w1:p9")
         self.stub_live_session(True)
         self.rule("hunk", ["session", "reload"], stderr="reload failed\n", exit_code=1)
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result, "reload failed")
         self.assertEqual(self.calls_matching("herdr", "split"), [])
         self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
@@ -131,7 +131,7 @@ class HerdrFailureTest(PluginTestCase):
 
     def test_unparseable_herdr_output_is_surfaced(self) -> None:
         self.rule("herdr", ["pane", "split"], stdout="not json\n")
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertFailed(result)
         self.assertEqual(self.calls_matching("herdr", "run"), [])
 
@@ -141,7 +141,7 @@ class StateDirTest(PluginTestCase):
         self.stub_checkout()
         self.stub_split("w1:p9")
         result = self.run_plugin(
-            "review", self.context(), extra_env={"HERDR_PLUGIN_STATE_DIR": None}
+            "review-changes", self.context(), extra_env={"HERDR_PLUGIN_STATE_DIR": None}
         )
         self.assertFailed(result, "HERDR_PLUGIN_STATE_DIR")
         self.assertEqual(self.calls_matching("herdr", "split"), [])
@@ -153,7 +153,7 @@ class StateDirTest(PluginTestCase):
             f"{self.state_dir}/review-panes.json", "w", encoding="utf-8"
         ) as handle:
             handle.write("{oops")
-        result = self.run_plugin("review", self.context())
+        result = self.run_plugin("review-changes", self.context())
         self.assertSucceeded(result)
         self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
 

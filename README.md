@@ -32,8 +32,8 @@ herdr plugin link /path/to/herdr-hunk
 
 | Action | What it does |
 | --- | --- |
-| `herdr-hunk.review` | Open or reuse a Hunk review of this checkout, including committed work. |
-| `herdr-hunk.review-commit` | The same pane, targeting the most recent commit. |
+| `herdr-hunk.review-changes` | Open or reuse `hunk diff` for this checkout, including committed work. |
+| `herdr-hunk.review-commit` | Open or reuse `hunk show`, targeting the most recent commit. |
 | `herdr-hunk.send-comments` | Stage this checkout's Hunk review notes in the agent pane that wrote the code. |
 
 Bind the actions in `~/.config/herdr/config.toml`:
@@ -42,7 +42,7 @@ Bind the actions in `~/.config/herdr/config.toml`:
 [[keys.command]]
 key = "prefix+d"
 type = "plugin_action"
-command = "herdr-hunk.review"
+command = "herdr-hunk.review-changes"
 description = "review changes in Hunk"
 
 [[keys.command]]

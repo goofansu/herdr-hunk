@@ -14,11 +14,11 @@ platforms = ["linux", "macos"]
 # next interpreter upgrade or hardcode a username.
 
 [[actions]]
-id = "review"
+id = "review-changes"
 title = "Review changes in Hunk"
 description = "Open or reuse a Hunk review of this checkout, including committed work"
 contexts = ["pane"]
-command = ["python3", "herdr_hunk.py", "review"]
+command = ["python3", "herdr_hunk.py", "review-changes"]
 
 [[actions]]
 id = "review-commit"
