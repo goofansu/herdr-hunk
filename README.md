@@ -1,18 +1,18 @@
-# herd-hunk
+# herdr-hunk
 
-Review the changes an agent made, in Hunk, beside the pane that made them. 
+Review the changes an agent made, in Hunk, beside the pane that made them.
 
 ## Requirements
 
-Herdr 0.8.0+, Hunk, Git, and Python 3.9+ on the Herdr server's `PATH`. Nothing is
-bundled and there is no build step.
+The plugin requires Herdr 0.8.0+, Hunk, Git, and Python 3.9+ on the Herdr
+server's `PATH`. Nothing is bundled, and there is no build step.
 
 ```bash
 npm install -g hunkdiff
 ```
 
-A Hunk installed *after* the Herdr server started is not visible to plugin
-commands until the server restarts.
+If Hunk is installed *after* the Herdr server starts, it is not visible to
+plugin commands until the server restarts.
 
 ## Install
 
