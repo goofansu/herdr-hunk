@@ -90,6 +90,22 @@ def pane_info(pane_id: str, **overrides) -> dict:
     return pane
 
 
+def hunk_session(
+    checkout: str, session_id: str = "s1", pid: int = 101, **overrides
+) -> dict:
+    session = {
+        "sessionId": session_id,
+        "pid": pid,
+        "cwd": checkout,
+        "repoRoot": checkout,
+        "inputKind": "vcs",
+        "title": "working tree",
+        "sourceLabel": checkout,
+    }
+    session.update(overrides)
+    return session
+
+
 class PluginTestCase(unittest.TestCase):
     """Base class that installs the fakes and runs the plugin."""
 
@@ -162,20 +178,67 @@ class PluginTestCase(unittest.TestCase):
         )
         self.rule("git", ["merge-base", head, "HEAD"], stdout=base + "\n")
 
-    def stub_split(self, pane_id: str = "w1:p9") -> None:
+    def stub_split(self, pane_id: str = "w1:p9", checkout: str | None = None) -> None:
+        """Open one managed plugin pane and register its Hunk session."""
         self.herdr_result(
-            ["pane", "split"], {"type": "pane_info", "pane": pane_info(pane_id)}
+            ["plugin", "pane", "open"],
+            {
+                "type": "plugin_pane_opened",
+                "plugin_pane": {
+                    "plugin_id": "herdr-hunk",
+                    "entrypoint": "review",
+                    "pane": pane_info(pane_id),
+                },
+            },
+        )
+        session = hunk_session(checkout or self.checkout)
+        self.rule(
+            "hunk",
+            ["session", "list", "--json"],
+            stdout=json.dumps({"sessions": [session]}),
+            after=1,
+        )
+        self.rule(
+            "hunk",
+            ["session", "list", "--json"],
+            stdout=json.dumps({"sessions": []}),
+        )
+        self.rule(
+            "hunk",
+            ["session", "get", "s1", "--json"],
+            stdout=json.dumps({"session": session}),
         )
 
-    def stub_live_session(self, live: bool = True) -> None:
+    def stub_live_session(
+        self,
+        live: bool = True,
+        checkout: str | None = None,
+        session_id: str = "s1",
+        pid: int = 101,
+    ) -> None:
         if live:
-            self.rule("hunk", ["session", "get"], stdout="Session: s1\n")
+            session = hunk_session(checkout or self.checkout, session_id, pid)
+            self.rule(
+                "hunk",
+                ["session", "get", session_id, "--json"],
+                stdout=json.dumps({"session": session}),
+            )
+            self.rule(
+                "hunk",
+                ["session", "list", "--json"],
+                stdout=json.dumps({"sessions": [session]}),
+            )
         else:
             self.rule(
                 "hunk",
                 ["session", "get"],
                 stderr="No live Hunk session for this repo.\n",
                 exit_code=1,
+            )
+            self.rule(
+                "hunk",
+                ["session", "list", "--json"],
+                stdout=json.dumps({"sessions": []}),
             )
 
     def stub_live_pane(self, pane_id: str, alive: bool = True) -> None:
@@ -193,12 +256,24 @@ class PluginTestCase(unittest.TestCase):
             )
 
     def seed_pane_map(
-        self, checkout: str, pane_id: str, origin: str | None = None
+        self,
+        checkout: str,
+        pane_id: str,
+        origin: str | None = None,
+        session_id: str | None = None,
+        managed: bool = False,
+        target: list[str] | None = None,
     ) -> None:
         record = {"review_pane": pane_id}
         if origin:
             record["origin_pane"] = origin
-        self.write_pane_map({checkout: record})
+        if session_id:
+            record["session_id"] = session_id
+        if managed:
+            record["plugin_pane"] = True
+        if target:
+            record["target"] = target
+        self.write_pane_map({checkout: [record]})
 
     def stub_process_info(self, pane_id: str, foreground: str | None = None) -> None:
         """``pane process-info``: idle at the shell, or running ``foreground``."""
@@ -251,6 +326,7 @@ class PluginTestCase(unittest.TestCase):
             "tab_id": "w1:t1",
             "focused_pane_id": "w1:p1",
             "focused_pane_cwd": self.checkout,
+            "focused_pane_agent": "claude",
             "invocation_source": "keybinding",
         }
         context.update(overrides)
@@ -317,11 +393,17 @@ class PluginTestCase(unittest.TestCase):
         ]
 
     def review_panes(self) -> dict:
-        """``checkout -> review pane id``, dropping the rest of each record."""
-        return {
-            checkout: record["review_pane"]
-            for checkout, record in self.pane_map().items()
-        }
+        """``checkout -> pane id/list``, dropping the rest of each pair record."""
+        result = {}
+        for checkout, value in self.pane_map().items():
+            records = value if isinstance(value, list) else [value]
+            panes = [
+                record["review_pane"]
+                for record in records
+                if isinstance(record, dict) and "review_pane" in record
+            ]
+            result[checkout] = panes[0] if len(panes) == 1 else panes
+        return result
 
     def pane_map(self) -> dict:
         path = os.path.join(self.state_dir, "review-panes.json")

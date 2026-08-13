@@ -5,12 +5,12 @@ Three actions, all invoked by the Herdr manifest as ``herdr_hunk.py <action>``:
 
 ``review-changes``
     Resolve the invoking pane's checkout and its correct review target, then
-    open or reuse a single Hunk review pane beside it via ``hunk diff``.
+    open or reuse that agent's Hunk review pane beside it via ``hunk diff``.
 ``review-commit``
     The same, targeting the most recent commit via ``hunk show``.
 ``send-comments``
     Collect the user's review notes from the live Hunk session and stage them
-    into the agent pane that produced the code.
+    into the Hunk pane's paired agent.
 
 Standard library only, no build step. Herdr, Hunk, and Git must already be
 installed; every call this plugin makes is a documented CLI subcommand.
@@ -30,6 +30,9 @@ import time
 PANE_MAP_FILE = "review-panes.json"
 NOTES_DIR = "notes"
 HUNK_INSTALL_HINT = "npm install -g hunkdiff"
+HUNK_TARGET_ENV = "HERDR_HUNK_TARGET_JSON"
+PLUGIN_ID = "herdr-hunk"
+PANE_ENTRYPOINT = "review"
 
 # A just-launched Hunk takes a moment to register with its daemon. Wait out that
 # gap rather than treating it as "no session" and splitting a duplicate pane.
@@ -40,7 +43,9 @@ HUNK_INSTALL_HINT = "npm install -g hunkdiff"
 SESSION_WAIT_TIMEOUT = 1.5
 SESSION_POLL_SECONDS = 0.25
 
-USAGE = "usage: herdr_hunk.py (review-changes | review-commit | send-comments)"
+USAGE = (
+    "usage: herdr_hunk.py (review-changes | review-commit | send-comments | run-hunk)"
+)
 
 
 class PluginError(Exception):
@@ -215,9 +220,12 @@ def state_dir() -> str:
 
 
 def load_reviews() -> dict:
-    """``checkout -> {"review_pane": id, "origin_pane": id}``, stale entries included.
+    """Return ``checkout -> [agent/Hunk pair records]``, including stale entries.
 
-    A bare string value is the older single-pane format and still reads.
+    The two checkout-global formats used before pairing (a pane-id string or one
+    record object) are accepted and normalized to one-item lists. They remain
+    unpaired unless they already contain ``origin_pane``; an agent must never
+    silently adopt an origin-less legacy Hunk.
     """
     path = os.path.join(state_dir(), PANE_MAP_FILE)
     try:
@@ -228,23 +236,53 @@ def load_reviews() -> dict:
     if not isinstance(entries, dict):
         return {}
     reviews = {}
-    for checkout, record in entries.items():
-        if isinstance(record, str):
-            reviews[checkout] = {"review_pane": record}
-        elif isinstance(record, dict) and isinstance(record.get("review_pane"), str):
-            reviews[checkout] = record
+    for checkout, value in entries.items():
+        if not isinstance(checkout, str):
+            continue
+        if isinstance(value, str):
+            records = [{"review_pane": value}]
+        elif isinstance(value, dict):
+            records = [value]
+        elif isinstance(value, list):
+            records = value
+        else:
+            continue
+        valid = [
+            record
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("review_pane"), str)
+        ]
+        if valid:
+            reviews[checkout] = valid
     return reviews
 
 
 def save_reviews(reviews: dict) -> None:
     path = os.path.join(state_dir(), PANE_MAP_FILE)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(reviews, handle, indent=2, sort_keys=True)
+    temporary = path + f".{os.getpid()}.tmp"
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(reviews, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def review_pane_ids(reviews: dict) -> set[str]:
     """Every pane this plugin opened for Hunk, across all checkouts."""
-    return {record["review_pane"] for record in reviews.values()}
+    return {record["review_pane"] for records in reviews.values() for record in records}
+
+
+def all_review_records(reviews: dict):
+    for checkout, records in reviews.items():
+        for record in records:
+            yield checkout, record
 
 
 # ---------------------------------------------------------------------------
@@ -261,30 +299,129 @@ def get_pane(pane_id: str) -> dict | None:
     return pane if isinstance(pane, dict) else None
 
 
-def session_is_live(checkout: str) -> bool:
-    return hunk(["session", "get", "--repo", checkout]).returncode == 0
+def list_sessions() -> list[dict]:
+    result = hunk(["session", "list", "--json"])
+    if result.returncode != 0:
+        raise PluginError(f"could not list live Hunk sessions: {_diagnostic(result)}")
+    try:
+        payload = json.loads(result.stdout)
+    except ValueError as error:
+        raise PluginError(f"unreadable session list from hunk: {error}") from error
+    sessions = payload.get("sessions") if isinstance(payload, dict) else None
+    if not isinstance(sessions, list):
+        raise PluginError("unreadable session list from hunk: no sessions array")
+    return [session for session in sessions if isinstance(session, dict)]
 
 
-def wait_for_session(checkout: str) -> bool:
-    """Poll up to ``SESSION_WAIT_TIMEOUT`` for a session that is still registering.
+def session_id(session: dict) -> str | None:
+    identifier = session.get("sessionId")
+    return identifier if isinstance(identifier, str) and identifier else None
 
-    A pane launched moments ago has a running Hunk that the daemon does not know
-    about yet. Treating that as "no session" splits a second pane over the first,
-    which is how a keybound action shreds a layout.
-    """
+
+def sessions_for_checkout(sessions: list[dict], checkout: str) -> list[dict]:
+    checkout = os.path.realpath(checkout)
+    return [
+        session
+        for session in sessions
+        if isinstance(session.get("repoRoot"), str)
+        and os.path.realpath(session["repoRoot"]) == checkout
+        and session_id(session)
+    ]
+
+
+def get_session(identifier: str) -> dict | None:
+    result = hunk(["session", "get", identifier, "--json"])
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except ValueError:
+        return None
+    session = payload.get("session") if isinstance(payload, dict) else None
+    return session if isinstance(session, dict) else None
+
+
+def hunk_process_ids(pane_id: str) -> set[int]:
+    """Foreground PIDs that could own the Hunk session in ``pane_id``."""
+    processes = (pane_process_info(pane_id) or {}).get("foreground_processes")
+    if not isinstance(processes, list):
+        return set()
+    return {
+        process["pid"]
+        for process in processes
+        if isinstance(process, dict) and isinstance(process.get("pid"), int)
+    }
+
+
+def identify_session(
+    checkout: str,
+    pane_id: str,
+    sessions: list[dict],
+    previous_ids: set[str] | None = None,
+    allow_existing: bool = False,
+) -> dict | None:
+    candidates = sessions_for_checkout(sessions, checkout)
+    pids = hunk_process_ids(pane_id)
+    by_pid = [session for session in candidates if session.get("pid") in pids]
+    if len(by_pid) == 1:
+        return by_pid[0]
+
+    if previous_ids is not None:
+        new = [
+            session for session in candidates if session_id(session) not in previous_ids
+        ]
+        if len(new) == 1:
+            return new[0]
+    if allow_existing and len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def wait_for_session(
+    checkout: str,
+    pane_id: str,
+    previous_ids: set[str] | None = None,
+    allow_existing: bool = False,
+) -> dict | None:
+    """Poll for the session owned by one pane, never by repo recency."""
     deadline = time.monotonic() + SESSION_WAIT_TIMEOUT
     while True:
-        if session_is_live(checkout):
-            return True
+        session = identify_session(
+            checkout,
+            pane_id,
+            list_sessions(),
+            previous_ids=previous_ids,
+            allow_existing=allow_existing,
+        )
+        if session:
+            return session
         if time.monotonic() >= deadline:
-            return False
+            return None
         time.sleep(SESSION_POLL_SECONDS)
 
 
-def reload_session(checkout: str, target: list[str]) -> None:
+def record_session(record: dict, checkout: str, pane_id: str) -> dict | None:
+    identifier = record.get("session_id")
+    if isinstance(identifier, str):
+        session = get_session(identifier)
+        if session in sessions_for_checkout([session] if session else [], checkout):
+            return session
+    sessions = list_sessions()
+    session = identify_session(checkout, pane_id, sessions)
+    if session:
+        return session
+    # Legacy records did not retain a session id. A sole repo session is only
+    # safe to adopt when the recorded pane is itself running Hunk; otherwise it
+    # may be an unrelated manually opened session in another pane.
+    if not record.get("plugin_pane") and pane_is_running_hunk(pane_id):
+        return identify_session(checkout, pane_id, sessions, allow_existing=True)
+    return None
+
+
+def reload_session(identifier: str, target: list[str]) -> None:
     # --watch on every reload: a reload drops watch mode, and under reuse-by-default
     # the reload path is the common one, so omitting it freezes the review.
-    result = hunk(["session", "reload", "--repo", checkout, "--", *target, "--watch"])
+    result = hunk(["session", "reload", identifier, "--", *target, "--watch"])
     if result.returncode != 0:
         raise PluginError(f"hunk session reload failed: {_diagnostic(result)}")
 
@@ -318,71 +455,312 @@ def pane_is_running_hunk(pane_id: str) -> bool:
     processes = info.get("foreground_processes")
     if not isinstance(processes, list):
         return False
-    return any(
-        isinstance(process, dict) and process.get("name") == "hunk"
-        for process in processes
-    )
+    for process in processes:
+        if not isinstance(process, dict):
+            continue
+        words = [process.get("name"), process.get("argv0"), process.get("cmdline")]
+        argv = process.get("argv")
+        if isinstance(argv, list):
+            words.extend(argv)
+        if any(
+            isinstance(word, str)
+            and (
+                os.path.basename(word) in ("hunk", "hunkdiff") or "bin/hunk.cjs" in word
+            )
+            for word in words
+        ):
+            return True
+    return False
 
 
-def open_review_pane(invoking_pane: str, checkout: str, target: list[str]) -> str:
-    split = herdr_json(
+def open_review_pane(invoking_pane: str, checkout: str, target: list[str]) -> dict:
+    opened = herdr_json(
         [
+            "plugin",
             "pane",
+            "open",
+            "--plugin",
+            PLUGIN_ID,
+            "--entrypoint",
+            PANE_ENTRYPOINT,
+            "--placement",
             "split",
+            "--target-pane",
             invoking_pane,
             "--direction",
             "right",
             "--cwd",
             checkout,
+            "--env",
+            HUNK_TARGET_ENV + "=" + json.dumps(target, separators=(",", ":")),
             "--focus",
         ]
     )
-    pane = split.get("pane")
+    plugin_pane = opened.get("plugin_pane")
+    pane = plugin_pane.get("pane") if isinstance(plugin_pane, dict) else None
     pane_id = pane.get("pane_id") if isinstance(pane, dict) else None
     if not isinstance(pane_id, str) or not pane_id:
-        raise PluginError("herdr pane split did not report a new pane")
-
-    try:
-        launch_hunk(pane_id, target)
-    except PluginError:
-        # Leave the layout as we found it rather than stranding an empty pane.
-        _run([herdr_bin(), "pane", "close", pane_id])
-        raise
-    return pane_id
+        raise PluginError("herdr plugin pane open did not report a new pane")
+    return pane
 
 
-def remembered_origin(context: dict, previous: str | None) -> str | None:
-    """The invoking pane when it is an agent, otherwise what was already known.
+def pane_from_context(context: dict) -> dict:
+    pane = {
+        "pane_id": invoking_pane_id(context),
+        "workspace_id": _text(context, "workspace_id"),
+        "tab_id": _text(context, "tab_id"),
+        "cwd": _text(context, "focused_pane_cwd"),
+        "agent": _text(context, "focused_pane_agent"),
+    }
+    return {key: value for key, value in pane.items() if value is not None}
 
-    Reuse is the common path, so an origin written once at open time ages into a
-    lie: it names the pane the review was first opened beside rather than the one
-    being reviewed from now. Refresh it whenever an agent invokes the action, and
-    leave it alone when the caller is the review pane itself or a plain shell.
-    """
+
+def set_origin(record: dict, pane: dict) -> None:
+    record["origin_pane"] = pane["pane_id"]
+    terminal = _text(pane, "terminal_id")
+    if terminal:
+        record["origin_terminal_id"] = terminal
+    agent_session = pane.get("agent_session")
+    if isinstance(agent_session, dict):
+        record["origin_agent_session"] = agent_session
+
+
+def set_review_pane(record: dict, pane: dict) -> None:
+    record["review_pane"] = pane["pane_id"]
+    terminal = _text(pane, "terminal_id")
+    if terminal:
+        record["review_terminal_id"] = terminal
+
+
+def record_for_review_pane(
+    reviews: dict, pane_id: str
+) -> tuple[str, dict, dict | None] | None:
+    """Resolve a pair by its Hunk pane, including a pane moved across workspaces."""
+    invoking = get_pane(pane_id)
+    invoking_terminal = _text(invoking or {}, "terminal_id")
+    for checkout, record in all_review_records(reviews):
+        recorded = record.get("review_pane")
+        if recorded == pane_id:
+            pane = invoking
+            expected = record.get("review_terminal_id")
+            if pane and (not expected or pane.get("terminal_id") == expected):
+                return checkout, record, pane
+    for checkout, record in all_review_records(reviews):
+        recorded = record.get("review_pane")
+        pane = get_pane(recorded) if isinstance(recorded, str) else None
+        expected = record.get("review_terminal_id")
+        if (
+            pane
+            and (not expected or pane.get("terminal_id") == expected)
+            and (
+                _text(pane, "pane_id") == _text(invoking or {}, "pane_id")
+                or (
+                    invoking_terminal
+                    and invoking_terminal == _text(pane, "terminal_id")
+                )
+            )
+        ):
+            return checkout, record, pane
+    return None
+
+
+def current_origin(record: dict, context: dict | None = None) -> dict | None:
+    origin_id = record.get("origin_pane")
+    pane = get_pane(origin_id) if isinstance(origin_id, str) else None
+    if (
+        pane is None
+        and context
+        and origin_id == _text(context, "focused_pane_id")
+        and _text(context, "focused_pane_agent")
+    ):
+        pane = pane_from_context(context)
+    if not pane or not _text(pane, "agent"):
+        return None
+    expected_terminal = record.get("origin_terminal_id")
+    if expected_terminal and expected_terminal != pane.get("terminal_id"):
+        return None
+    expected_session = record.get("origin_agent_session")
+    current_session = pane.get("agent_session")
+    if isinstance(expected_session, dict) and expected_session != current_session:
+        return None
+    set_origin(record, pane)
+    return pane
+
+
+def record_for_origin(reviews: dict, checkout: str, origin: dict) -> dict | None:
+    pane_id = origin["pane_id"]
+    terminal_id = _text(origin, "terminal_id")
+    for record in reviews.get(checkout, []):
+        if record.get("origin_pane") == pane_id:
+            expected = record.get("origin_terminal_id")
+            if not expected or not terminal_id or expected == terminal_id:
+                return record
+        if terminal_id and record.get("origin_terminal_id") == terminal_id:
+            return record
+        recorded = record.get("origin_pane")
+        current = get_pane(recorded) if isinstance(recorded, str) else None
+        expected = record.get("origin_terminal_id")
+        if (
+            current
+            and _text(current, "pane_id") == pane_id
+            and (not expected or not terminal_id or expected == terminal_id)
+        ):
+            return record
+    return None
+
+
+def discard_replaced_origin(reviews: dict, checkout: str, origin: dict) -> None:
+    """Forget pairs owned by a prior occupant of this agent pane."""
+    records = reviews.get(checkout, [])
+    pane_id = origin["pane_id"]
+    terminal_id = _text(origin, "terminal_id")
+    agent_session = origin.get("agent_session")
+    kept = []
+    for record in records:
+        same_pane = record.get("origin_pane") == pane_id
+        expected_terminal = record.get("origin_terminal_id")
+        expected_session = record.get("origin_agent_session")
+        replaced = same_pane and (
+            (expected_terminal and terminal_id and expected_terminal != terminal_id)
+            or (
+                isinstance(expected_session, dict)
+                and isinstance(agent_session, dict)
+                and expected_session != agent_session
+            )
+        )
+        if not replaced:
+            kept.append(record)
+    if len(kept) != len(records):
+        if kept:
+            reviews[checkout] = kept
+        else:
+            reviews.pop(checkout, None)
+
+
+def current_tab_agent(context: dict, reviews: dict) -> dict:
+    workspace = workspace_id(context)
+    tab = _text(context, "tab_id")
+    if not tab:
+        raise PluginError("no tab in the invocation context")
+    invoking = invoking_pane_id(context)
+    agents = [
+        pane
+        for pane in agent_panes(workspace, review_pane_ids(reviews)).values()
+        if _text(pane, "tab_id") == tab
+    ]
+    if _text(context, "focused_pane_agent") and invoking not in {
+        pane.get("pane_id") for pane in agents
+    }:
+        agents.append(pane_from_context(context))
+    if len(agents) == 1:
+        return agents[0]
+    if not agents:
+        raise PluginError(
+            f"no agent pane in tab {tab}; invoke review from an agent or a shell "
+            "beside exactly one agent"
+        )
+    choices = ", ".join(sorted(pane["pane_id"] for pane in agents))
+    raise PluginError(
+        f"multiple agent panes in tab {tab} ({choices}); invoke the action from "
+        "the intended agent instead of guessing"
+    )
+
+
+def pair_origin(
+    context: dict,
+    reviews: dict,
+    known_pair: tuple[str, dict, dict | None] | None,
+) -> tuple[dict | None, dict | None]:
+    if known_pair:
+        record = known_pair[1]
+        return current_origin(record, context), record
     if _text(context, "focused_pane_agent"):
-        return _text(context, "focused_pane_id")
-    return previous
+        origin = get_pane(invoking_pane_id(context)) or pane_from_context(context)
+        return origin, None
+    return current_tab_agent(context, reviews), None
 
 
-def remember_review(
-    reviews: dict, checkout: str, review_pane: str, context: dict
+def replace_record(
+    reviews: dict, checkout: str, old_record: dict | None, new_record: dict
 ) -> None:
-    record = {"review_pane": review_pane}
-    origin = remembered_origin(context, reviews.get(checkout, {}).get("origin_pane"))
-    if origin:
-        # The agent that asked for this review is the one that produced the code,
-        # which is what send-comments needs when a workspace holds several.
-        record["origin_pane"] = origin
-    if reviews.get(checkout) != record:
-        reviews[checkout] = record
-        save_reviews(reviews)
+    records = reviews.setdefault(checkout, [])
+    if old_record in records:
+        records[records.index(old_record)] = new_record
+    else:
+        records.append(new_record)
 
 
-def focus_review(review_pane: dict, context: dict) -> None:
-    """Surface the review pane. `pane focus` is directional, so focus its workspace."""
-    workspace = _text(review_pane, "workspace_id") or _text(context, "workspace_id")
-    if workspace:
-        herdr(["workspace", "focus", workspace])
+def current_review_pane(record: dict) -> dict | None:
+    pane_id = record.get("review_pane")
+    pane = get_pane(pane_id) if isinstance(pane_id, str) else None
+    expected = record.get("review_terminal_id")
+    if pane and expected and pane.get("terminal_id") != expected:
+        return None
+    if pane:
+        set_review_pane(record, pane)
+    return pane
+
+
+def focus_review(record: dict, review_pane: dict, origin: dict | None = None) -> None:
+    """Focus an exact managed pane; legacy panes can only be focused by tab."""
+    pane_id = record["review_pane"]
+    focused = False
+    if record.get("plugin_pane"):
+        result = _run([herdr_bin(), "plugin", "pane", "focus", pane_id])
+        focused = result.returncode == 0
+        if not focused:
+            print(
+                f"herdr-hunk: could not focus managed pane {pane_id}: "
+                f"{_diagnostic(result)}",
+                file=sys.stderr,
+            )
+    if not focused:
+        tab = _text(review_pane, "tab_id")
+        if tab:
+            result = _run([herdr_bin(), "tab", "focus", tab])
+            focused = result.returncode == 0
+
+    if origin and _text(origin, "tab_id") != _text(review_pane, "tab_id"):
+        location = (
+            f"workspace {_text(review_pane, 'workspace_id') or '?'} / "
+            f"tab {_text(review_pane, 'tab_id') or '?'} / pane {pane_id}"
+        )
+        print(f"herdr-hunk: paired Hunk is in {location}", file=sys.stderr)
+        _run(
+            [
+                herdr_bin(),
+                "notification",
+                "show",
+                "Focused paired Hunk",
+                "--body",
+                location,
+                "--sound",
+                "none",
+            ]
+        )
+
+
+def capture_note_targets(record: dict, identifier: str, target: list[str]) -> None:
+    old_target = record.get("target")
+    if old_target == target:
+        return
+    try:
+        notes = list_user_notes(identifier)
+    except PluginError:
+        record["note_context_uncertain"] = True
+        return
+    mappings = record.get("note_targets")
+    if not isinstance(mappings, dict):
+        mappings = {}
+        record["note_targets"] = mappings
+    previous = (
+        old_target if isinstance(old_target, list) else "unknown (pre-pairing review)"
+    )
+    for note in notes:
+        note_key = note_identity(note)
+        if note_key not in mappings:
+            mappings[note_key] = previous
+    record.pop("note_context_uncertain", None)
 
 
 def action_review(action: str) -> int:
@@ -390,46 +768,108 @@ def action_review(action: str) -> int:
     invoking_pane = invoking_pane_id(context)
     require_hunk()
     reviews = load_reviews()
-    checkout = resolve_checkout(start_directory(context))
+    known_pair = record_for_review_pane(reviews, invoking_pane)
+    checkout = (
+        known_pair[0] if known_pair else resolve_checkout(start_directory(context))
+    )
     target = ["show"] if action == "review-commit" else diff_target(context, checkout)
+    origin, known_record = pair_origin(context, reviews, known_pair)
+    if known_record and origin is None:
+        # Pairing follows the current agent occupant. A dead/replaced agent makes
+        # this relationship stale instead of transferable to another agent.
+        reviews[checkout].remove(known_record)
+        if not reviews[checkout]:
+            del reviews[checkout]
+        save_reviews(reviews)
+        raise PluginError(
+            "the paired agent is gone or was replaced; invoke review from the "
+            "current agent to create a new pair"
+        )
+    if origin is not None:
+        discard_replaced_origin(reviews, checkout, origin)
+    record = known_record or record_for_origin(reviews, checkout, origin)
 
-    recorded = reviews.get(checkout, {}).get("review_pane")
-    review_pane = get_pane(recorded) if recorded else None
-    if review_pane:
-        # A pane we already own is reusable unless something else has taken it
-        # over. Splitting a second one is what degrades the layout, so it is the
-        # last resort rather than the answer to every unhealthy session.
-        live = session_is_live(checkout)
-        if not live and pane_is_running_hunk(recorded):
-            live = wait_for_session(checkout)
-            if not live:
-                # Hunk is up but its daemon never answered, so the session cannot
-                # be retargeted. Splitting would stack a second Hunk on the first;
-                # say what is wrong instead and leave the layout alone.
-                focus_review(review_pane, context)
-                raise PluginError(
-                    f"Hunk is running in {recorded} but no session registered for "
-                    f"{checkout}; the Hunk daemon may be unreachable"
+    if record:
+        origin = current_origin(record, context)
+        if origin is None:
+            reviews[checkout].remove(record)
+            if not reviews[checkout]:
+                del reviews[checkout]
+            record = None
+
+    if record:
+        review_pane = current_review_pane(record)
+        if review_pane:
+            pane_id = record["review_pane"]
+            session = record_session(record, checkout, pane_id)
+            if not session and pane_is_running_hunk(pane_id):
+                session = wait_for_session(
+                    checkout,
+                    pane_id,
+                    allow_existing=not record.get("plugin_pane"),
                 )
+                if not session:
+                    focus_review(record, review_pane, origin)
+                    raise PluginError(
+                        f"Hunk is running in {pane_id} but its session did not "
+                        "register; the Hunk daemon may be unreachable"
+                    )
 
-        verb = None
-        if live:
-            reload_session(checkout, target)
-            verb = "reloaded"
-        elif pane_is_idle_shell(recorded):
-            # Hunk exited and left our pane at a prompt: start it again in place.
-            launch_hunk(recorded, target)
-            verb = "relaunched"
+            verb = None
+            if session:
+                identifier = session_id(session)
+                capture_note_targets(record, identifier, target)
+                reload_session(identifier, target)
+                record["session_id"] = identifier
+                verb = "reloaded"
+            elif pane_is_idle_shell(pane_id):
+                before = {
+                    session_id(item) for item in list_sessions() if session_id(item)
+                }
+                launch_hunk(pane_id, target)
+                session = wait_for_session(checkout, pane_id, previous_ids=before)
+                if not session:
+                    raise PluginError(
+                        f"relaunched Hunk in {pane_id}, but its session did not register"
+                    )
+                record["session_id"] = session_id(session)
+                verb = "relaunched"
 
-        if verb:
-            remember_review(reviews, checkout, recorded, context)
-            focus_review(review_pane, context)
-            print(f"{verb} Hunk review in {recorded}: {' '.join(target)}")
-            return 0
+            if verb:
+                set_origin(record, origin)
+                record["target"] = target
+                save_reviews(reviews)
+                focus_review(record, review_pane, origin)
+                print(
+                    f"{verb} paired Hunk in {pane_id} "
+                    f"({_text(review_pane, 'workspace_id') or '?'}/"
+                    f"{_text(review_pane, 'tab_id') or '?'}): {' '.join(target)}"
+                )
+                return 0
 
-    pane_id = open_review_pane(invoking_pane, checkout, target)
-    remember_review(reviews, checkout, pane_id, context)
-    print(f"opened Hunk review in {pane_id}: {' '.join(target)}")
+    if origin is None:
+        raise PluginError(
+            "the paired agent is gone or was replaced; invoke review from the "
+            "current agent to create a new pair"
+        )
+    before = {session_id(item) for item in list_sessions() if session_id(item)}
+    review_pane = open_review_pane(origin["pane_id"], checkout, target)
+    pane_id = review_pane["pane_id"]
+    new_record = {"review_pane": pane_id, "plugin_pane": True, "target": target}
+    set_origin(new_record, origin)
+    set_review_pane(new_record, review_pane)
+    replace_record(reviews, checkout, record, new_record)
+    save_reviews(reviews)
+
+    session = wait_for_session(checkout, pane_id, previous_ids=before)
+    if not session:
+        raise PluginError(
+            f"opened Hunk in {pane_id}, but its session did not register; "
+            "the Hunk daemon may be unreachable"
+        )
+    new_record["session_id"] = session_id(session)
+    save_reviews(reviews)
+    print(f"opened paired Hunk in {pane_id}: {' '.join(target)}")
     return 0
 
 
@@ -438,12 +878,14 @@ def action_review(action: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def list_user_notes(checkout: str) -> list[dict]:
+def list_user_notes(identifier: str) -> list[dict]:
     result = hunk(
-        ["session", "comment", "list", "--repo", checkout, "--type", "user", "--json"]
+        ["session", "comment", "list", identifier, "--type", "user", "--json"]
     )
     if result.returncode != 0:
-        raise PluginError(f"no live Hunk review for {checkout}: {_diagnostic(result)}")
+        raise PluginError(
+            f"no live Hunk review for session {identifier}: {_diagnostic(result)}"
+        )
     try:
         payload = json.loads(result.stdout)
     except ValueError as error:
@@ -466,10 +908,49 @@ def note_location(note: dict) -> str:
     return str(path)
 
 
-def format_notes(checkout: str, notes: list[dict]) -> str:
-    lines = ["# Hunk review notes", "", f"Checkout: {checkout}", ""]
+def target_label(target) -> str:
+    if isinstance(target, list) and all(isinstance(word, str) for word in target):
+        return "hunk " + " ".join(target)
+    if isinstance(target, str) and target:
+        return target
+    return "unknown Hunk target"
+
+
+def note_identity(note: dict) -> str:
+    """Stable-enough identity for target attribution, including older Hunk notes."""
+    for key in ("noteId", "commentId", "id"):
+        identifier = note.get(key)
+        if isinstance(identifier, str) and identifier:
+            return identifier
+    fields = [
+        note.get("source"),
+        note.get("filePath"),
+        note.get("newRange"),
+        note.get("oldRange"),
+        note.get("hunkIndex"),
+        note.get("title"),
+        note.get("body"),
+        note.get("createdAt"),
+    ]
+    encoded = json.dumps(fields, separators=(",", ":"), sort_keys=True)
+    return "content:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def format_notes(
+    checkout: str, notes: list[dict], note_targets: dict, current_target
+) -> str:
+    lines = [
+        "# Hunk review notes",
+        "",
+        f"Checkout: {checkout}",
+        f"Current review target: `{target_label(current_target)}`",
+        "",
+    ]
     for note in notes:
         lines.append(f"## {note_location(note)}")
+        lines.append("")
+        target = note_targets.get(note_identity(note), current_target)
+        lines.append(f"Review target: `{target_label(target)}`")
         lines.append("")
         title = note.get("title")
         if isinstance(title, str) and title.strip():
@@ -481,57 +962,15 @@ def format_notes(checkout: str, notes: list[dict]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def notes_path(checkout: str) -> str:
+def notes_path(checkout: str, pair_key: str) -> str:
     directory = os.path.join(state_dir(), NOTES_DIR)
     os.makedirs(directory, exist_ok=True)
-    digest = hashlib.sha256(checkout.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256((checkout + "\0" + pair_key).encode("utf-8")).hexdigest()[
+        :12
+    ]
     name = os.path.basename(checkout.rstrip(os.sep)) or "checkout"
     safe = "".join(char if char.isalnum() or char in "-_" else "-" for char in name)
     return os.path.join(directory, f"{safe}-{digest}.md")
-
-
-def find_agent_pane(
-    workspace: str,
-    context: dict,
-    checkout: str,
-    record: dict,
-    review_panes: set[str],
-) -> tuple[str, list[str]]:
-    """The agent pane that produced the code, and any candidates passed over.
-
-    Only an empty workspace is a failure. A wrong pick is staged unsubmitted in a
-    pane the caller then focuses, so it is visible and inert; refusing to act on a
-    review the user has already written is the worse outcome. The job here is
-    therefore to pick well, not to abstain.
-    """
-    agents = agent_panes(workspace, review_panes)
-    if not agents:
-        raise PluginError(f"no agent pane in workspace {workspace}")
-
-    # The pane this checkout's review was opened beside.
-    origin = record.get("origin_pane")
-    if isinstance(origin, str) and origin in agents:
-        return origin, []
-    # Failing that, the invoking pane, when send-comments is fired from the agent.
-    invoking = _text(context, "focused_pane_id")
-    if invoking and invoking in agents:
-        return invoking, []
-
-    # Narrow by the strongest signals a pane listing carries. An agent working in
-    # this checkout is a likelier author than one somewhere else, and one sharing
-    # the invoking tab is likelier still — which is the Hunk-opened-by-hand case,
-    # where the review sits beside the agent that produced the code.
-    tab = _text(context, "tab_id")
-    here = [pane for pane in agents.values() if pane_is_within(pane, checkout)]
-    same_tab = [pane for pane in here if _text(pane, "tab_id") == tab]
-    for group in (same_tab, here, list(agents.values())):
-        if len(group) == 1:
-            return group[0]["pane_id"], []
-
-    group = same_tab or here or list(agents.values())
-    candidates = [pane["pane_id"] for pane in group]
-    chosen = most_recently_active(candidates)
-    return chosen, [pane_id for pane_id in candidates if pane_id != chosen]
 
 
 def agent_panes(workspace: str, review_panes: set[str]) -> dict:
@@ -550,114 +989,196 @@ def agent_panes(workspace: str, review_panes: set[str]) -> dict:
     }
 
 
-def pane_is_within(pane: dict, checkout: str) -> bool:
-    """Whether a pane is working inside the checkout under review.
-
-    Both directories are resolved, because a worktree can be reached through a
-    symlink and a string compare would miss the match. The separator matters too:
-    a bare prefix test would put ``/repo-backup`` inside ``/repo``. Either the
-    shell's directory or the foreground process's counts, so an agent that has
-    cd'd into a subdirectory still belongs to the checkout it started in.
-    """
-    root = os.path.realpath(checkout)
-    for key in ("cwd", "foreground_cwd"):
-        directory = _text(pane, key)
-        if not directory:
-            continue
-        directory = os.path.realpath(directory)
-        if directory == root or directory.startswith(root + os.sep):
-            return True
-    return False
-
-
-def most_recently_active(candidates: list[str]) -> str:
-    """Of several agents, the one whose lifecycle state changed last.
-
-    The agent that just finished the work being reviewed is the one that moved
-    most recently. Falls back to listing order when the sequence is unavailable.
-    """
-    result = _run([herdr_bin(), "agent", "list"])
-    ranked: dict = {}
-    if result.returncode == 0:
-        agents = (response_result(result.stdout) or {}).get("agents")
-        if isinstance(agents, list):
-            for agent in agents:
-                if isinstance(agent, dict) and isinstance(
-                    agent.get("state_change_seq"), int
-                ):
-                    ranked[agent.get("pane_id")] = agent["state_change_seq"]
-    return max(candidates, key=lambda pane_id: ranked.get(pane_id, -1))
-
-
-def announce_ambiguity(chosen: str, passed_over: list[str]) -> None:
-    """Say which agent was picked when more than one could have been the author.
-
-    Plugin stdout is only visible in the command log, so a toast is what actually
-    reaches the user. Best effort: this is a courtesy, not the work.
-    """
-    others = ", ".join(sorted(passed_over))
-    print(f"herdr-hunk: chose {chosen}; also running: {others}", file=sys.stderr)
-    _run(
-        [
-            herdr_bin(),
-            "notification",
-            "show",
-            "Review notes staged",
-            "--body",
-            f"Staged in {chosen}. Other agents here: {others}.",
-            "--sound",
-            "none",
-        ]
+def manual_session(context: dict, checkout: str) -> dict:
+    sessions = list_sessions()
+    session = identify_session(
+        checkout, invoking_pane_id(context), sessions, allow_existing=True
     )
+    if session:
+        return session
+    candidates = sessions_for_checkout(sessions, checkout)
+    if not candidates:
+        raise PluginError(f"no live Hunk review for {checkout}")
+    identifiers = ", ".join(session_id(item) for item in candidates)
+    raise PluginError(
+        f"multiple live Hunk sessions match {checkout} ({identifiers}); invoke "
+        "send-comments from the intended Hunk pane so its process can be identified"
+    )
+
+
+def manual_target(session: dict) -> str:
+    for key in ("title", "sourceLabel", "inputKind"):
+        value = session.get(key)
+        if isinstance(value, str) and value:
+            return f"unmanaged Hunk session: {value}"
+    return f"unmanaged Hunk session {session_id(session) or '(unknown)'}"
+
+
+def note_target_map(record: dict | None, notes: list[dict], current_target) -> dict:
+    if not record:
+        return {}
+    mappings = record.get("note_targets")
+    if not isinstance(mappings, dict):
+        mappings = {}
+        record["note_targets"] = mappings
+    fallback = (
+        "unknown (review target changed before note context was captured)"
+        if record.get("note_context_uncertain")
+        else current_target
+    )
+    for note in notes:
+        note_key = note_identity(note)
+        if note_key not in mappings:
+            mappings[note_key] = fallback
+    # Once every currently visible note has been assigned the uncertainty
+    # marker, notes created afterward can safely inherit the current target.
+    record.pop("note_context_uncertain", None)
+    return mappings
+
+
+def focus_agent(pane_id: str) -> None:
+    focus = _run([herdr_bin(), "agent", "focus", pane_id])
+    if focus.returncode != 0:
+        print(
+            f"herdr-hunk: could not focus {pane_id}: {_diagnostic(focus)}",
+            file=sys.stderr,
+        )
 
 
 def action_send_comments() -> int:
     context = read_context()
-    workspace = workspace_id(context)
+    invoking = invoking_pane_id(context)
     require_hunk()
-    checkout = resolve_checkout(start_directory(context))
-
-    notes = list_user_notes(checkout)
-    if not notes:
-        raise PluginError(f"no review notes in the live Hunk review for {checkout}")
-
-    path = notes_path(checkout)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(format_notes(checkout, notes))
-
-    # Exclude every review pane this plugin knows about, not just this checkout's:
-    # a pane recorded under another key is still Hunk, and must never be the target.
     reviews = load_reviews()
-    agent_pane, passed_over = find_agent_pane(
-        workspace,
-        context,
-        checkout,
-        reviews.get(checkout, {}),
-        review_pane_ids(reviews),
-    )
+    by_review = record_for_review_pane(reviews, invoking)
+    checkout = by_review[0] if by_review else resolve_checkout(start_directory(context))
 
-    # One line: send-text delivers embedded newlines as Enter, which would submit
-    # the message line by line into the agent's terminal.
+    record = by_review[1] if by_review else None
+    if record:
+        origin = current_origin(record, context)
+        if origin is None:
+            raise PluginError(
+                "the paired agent is gone or was replaced; invoke review from the "
+                "current agent to create a new pair"
+            )
+    else:
+        if _text(context, "focused_pane_agent"):
+            origin = get_pane(invoking) or pane_from_context(context)
+        else:
+            origin = current_tab_agent(context, reviews)
+        record = record_for_origin(reviews, checkout, origin)
+        if record:
+            origin = current_origin(record, context)
+            if origin is None:
+                raise PluginError(
+                    "the paired agent is gone or was replaced; invoke review from "
+                    "the current agent to create a new pair"
+                )
+
+    if record:
+        review_pane = current_review_pane(record)
+        if not review_pane:
+            raise PluginError(
+                "the paired Hunk pane is gone; invoke review from the agent to "
+                "create a new pair"
+            )
+        session = record_session(record, checkout, record["review_pane"])
+        if not session:
+            raise PluginError(
+                f"no live Hunk session for the pair in {record['review_pane']}; "
+                "invoke review from the agent to relaunch it"
+            )
+        identifier = session_id(session)
+        record["session_id"] = identifier
+        current_target = record.get("target") or manual_target(session)
+    else:
+        session = manual_session(context, checkout)
+        identifier = session_id(session)
+        claimed = next(
+            (
+                pair
+                for pair in reviews.get(checkout, [])
+                if pair.get("session_id") == identifier
+            ),
+            None,
+        )
+        if claimed:
+            raise PluginError(
+                f"Hunk session {identifier} belongs to another agent pair; invoke "
+                "send-comments from that pair's Hunk, or invoke review from the "
+                "current agent to create a new pair"
+            )
+        current_target = manual_target(session)
+
+    notes = list_user_notes(identifier)
+    if not notes:
+        raise PluginError(f"no review notes in Hunk session {identifier}")
+    mappings = note_target_map(record, notes, current_target)
+    body = format_notes(checkout, notes, mappings, current_target)
+    pair_key = (
+        str(record.get("origin_terminal_id") or record.get("origin_pane"))
+        if record
+        else identifier
+    )
+    path = notes_path(checkout, pair_key)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(body)
+
+    agent_pane = origin["pane_id"]
     instruction = (
         f"Read my review notes in {path} and address each one; "
-        "the file lists every note by file and line."
+        "the file lists every note by review target, file, and line."
     )
-    herdr(["pane", "send-text", agent_pane, instruction])
-    if passed_over:
-        announce_ambiguity(agent_pane, passed_over)
+    digest = hashlib.sha256((body + "\0" + instruction).encode("utf-8")).hexdigest()
+    previous = record.get("last_stage") if record else None
+    duplicate = (
+        isinstance(previous, dict)
+        and previous.get("digest") == digest
+        and previous.get("agent_terminal_id") == origin.get("terminal_id")
+    )
+    if not duplicate:
+        # One line: send-text is literal and non-submitting. The user sees it in
+        # the paired agent and deliberately decides whether to press Enter.
+        herdr(["pane", "send-text", agent_pane, instruction])
+        if record is not None:
+            record["last_stage"] = {
+                "digest": digest,
+                "agent_terminal_id": origin.get("terminal_id"),
+            }
+            save_reviews(reviews)
+    elif record is not None:
+        save_reviews(reviews)
 
-    # The text is staged, not submitted, so put the user in front of it to decide.
-    # Best effort: the notes are already staged, and a failure to focus must not
-    # report the action as failed when the work it was asked to do happened.
-    focus = _run([herdr_bin(), "agent", "focus", agent_pane])
-    if focus.returncode != 0:
+    focus_agent(agent_pane)
+    if duplicate:
         print(
-            f"herdr-hunk: could not focus {agent_pane}: {_diagnostic(focus)}",
-            file=sys.stderr,
+            f"identical review notes were already staged in {agent_pane}; focused "
+            "the existing instruction"
         )
-
-    print(f"staged {len(notes)} review note(s) in {agent_pane} via {path}")
+    else:
+        print(f"staged {len(notes)} review note(s) in {agent_pane} via {path}")
     return 0
+
+
+def action_run_hunk() -> int:
+    """Managed-pane entrypoint: replace this process with the requested Hunk TUI."""
+    require_hunk()
+    raw = os.environ.get(HUNK_TARGET_ENV)
+    try:
+        target = json.loads(raw or "")
+    except ValueError as error:
+        raise PluginError(f"unreadable managed Hunk target: {error}") from error
+    if (
+        not isinstance(target, list)
+        or not target
+        or target[0] not in ("diff", "show")
+        or not all(isinstance(word, str) and word for word in target)
+    ):
+        raise PluginError("unreadable managed Hunk target")
+    try:
+        os.execvp("hunk", ["hunk", *target, "--watch"])
+    except OSError as error:
+        raise PluginError(f"could not launch hunk: {error}") from error
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +1196,8 @@ def main(argv: list[str]) -> int:
             return action_review(action)
         if action == "send-comments":
             return action_send_comments()
+        if action == "run-hunk":
+            return action_run_hunk()
     except PluginError as error:
         print(f"herdr-hunk: {error}", file=sys.stderr)
         return 1

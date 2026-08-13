@@ -30,6 +30,16 @@ command = ["python3", "herdr_hunk.py", "review-commit"]
 [[actions]]
 id = "send-comments"
 title = "Send Hunk review notes to the agent"
-description = "Stage this checkout's Hunk review notes in the agent pane that wrote the code"
+description = "Stage this Hunk's review notes in its paired agent pane"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "send-comments"]
+
+# Review actions open this as a managed split so Herdr retains pane ownership
+# when the user moves it and can later focus the exact pane by ID.
+[[panes]]
+id = "review"
+title = "Hunk review"
+placement = "split"
+# `plugin pane open --cwd <checkout>` overrides the plugin-root default, so use
+# Herdr's protected root variable to find the script from the reviewed checkout.
+command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-hunk"]

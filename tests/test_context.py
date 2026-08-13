@@ -18,8 +18,8 @@ class ContextTest(PluginTestCase):
             "review-changes", self.context(focused_pane_id="w1:p4")
         )
         self.assertSucceeded(result)
-        split = self.calls_matching("herdr", "split")[0]
-        self.assertIn("w1:p4", split)
+        opened = self.calls_matching("herdr", "plugin", "pane", "open")[0]
+        self.assertEqual(opened[opened.index("--target-pane") + 1], "w1:p4")
 
     def test_absent_context_fails_without_acting(self) -> None:
         result = self.run_plugin("review-changes")
@@ -72,7 +72,7 @@ class ContextTest(PluginTestCase):
             "review-changes", self.context(), extra_env={"HERDR_BIN_PATH": alias}
         )
         self.assertSucceeded(result)
-        self.assertEqual(len(self.calls_matching("herdr", "split")), 1)
+        self.assertEqual(len(self.calls_matching("herdr", "plugin", "pane", "open")), 1)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 
@@ -15,10 +16,13 @@ class TargetResolutionTest(PluginTestCase):
         self.stub_split("w1:p9")
 
     def hunk_command(self) -> list[str]:
-        """The Hunk command line the plugin asked Herdr to run in the review pane."""
-        runs = self.calls_matching("herdr", "run")
-        self.assertEqual(len(runs), 1, f"expected one pane run, got {runs}")
-        return runs[0][runs[0].index("hunk") :]
+        """The Hunk command encoded for the managed review-pane entrypoint."""
+        opens = self.calls_matching("herdr", "plugin", "pane", "open")
+        self.assertEqual(len(opens), 1, f"expected one pane open, got {opens}")
+        value = opens[0][opens[0].index("--env") + 1]
+        prefix = "HERDR_HUNK_TARGET_JSON="
+        self.assertTrue(value.startswith(prefix))
+        return ["hunk", *json.loads(value[len(prefix) :]), "--watch"]
 
     def test_worktree_with_committed_work_targets_the_merge_base(self) -> None:
         self.stub_merge_base(head="cafe1234", base="beef5678")
@@ -131,6 +135,8 @@ class CheckoutResolutionTest(PluginTestCase):
     def test_a_path_containing_spaces_survives_to_every_cli_call(self) -> None:
         spaced = os.path.join(self.tmp, "my checkout")
         os.makedirs(spaced)
+        self.rules = []
+        self.stub_split("w1:p9", checkout=spaced)
         self.stub_checkout(toplevel=spaced)
         result = self.run_plugin(
             "review-changes", self.context(focused_pane_cwd=spaced)

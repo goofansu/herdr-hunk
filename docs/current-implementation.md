@@ -1,252 +1,259 @@
 # Current implementation reference
 
-This document is the starting point for agents changing `herdr-hunk`. It records
-the implementation as of 2026-08-13 so that routine work does not require
-reconstructing the plugin from source and tests. Source remains authoritative if
-it diverges from this document.
+This document records the implementation after applying
+`docs/pragmatic-pane-evaluation.md` on 2026-08-13. Source remains authoritative
+if it diverges from this reference.
 
-## Purpose and boundaries
+## Product model and boundaries
 
-`herdr-hunk` connects three existing command-line tools:
+`herdr-hunk` connects three command-line tools:
 
-- **Herdr** owns workspaces, panes, focus, plugin invocation context, and plugin
-  state storage.
-- **Hunk** renders a review and exposes its live session and user comments through
-  its CLI.
-- **Git** resolves the checkout and, for linked worktrees, the changeset base.
+- **Herdr** owns invocation context, agent identity, terminal panes, focus, and
+  plugin state directories.
+- **Hunk** renders reviews and exposes live sessions and user comments.
+- **Git** resolves the checkout and linked-worktree comparison base.
 
-### Product goal versus current behavior
+The durable unit is an **agent–Hunk copilot pair**. One checkout may have many
+pairs. A second agent never retargets another agent's Hunk, and comments from a
+known Hunk never use workspace-wide lifecycle recency to choose an agent.
 
-The product goal, clarified by the maintainer on 2026-08-13, is:
+The repository remains one standard-library Python script with no build step.
+`herdr-plugin.toml` declares three pane-context actions and one managed pane
+entrypoint:
 
-> A Hunk pane is the agent's copilot in the current tab.
-
-In normal use, invoking review from an agent should therefore open or reuse that
-agent's Hunk in the same tab, and comments from a plugin-managed Hunk should
-return deterministically to its paired agent. Repeated invocation should not
-multiply panes unnecessarily, and one agent must never silently take over
-another agent's Hunk or comments.
-
-This is a user-facing relationship, not a demand for rigid layout ownership. A
-user may move a Hunk pane deliberately; the plugin should respect that rather
-than automatically moving it back. Review from an ordinary shell remains useful
-when exactly one agent is in the current tab. Pairing only needs to follow the
-current agent occupying its pane; it need not survive replacement by another
-agent process.
-
-The current implementation only establishes the desired relationship on first
-open. Its persisted identity is the checkout path, so later invocations can
-reuse the same Hunk from another tab or workspace and repoint its remembered
-origin to another agent. Treat that as an implementation gap, not the desired
-product model.
-
-The plugin is one standard-library Python script, `herdr_hunk.py`. Herdr runs it
-directly from the plugin directory; there is no package, daemon, build artifact,
-or install step owned by this repository. `herdr-plugin.toml` declares three
-pane-context actions and requires Herdr 0.8.0 or newer:
-
-| Action | Entry point | Result |
+| Manifest entry | Python entry | Result |
 | --- | --- | --- |
-| `review-changes` | `action_review("review-changes")` | Opens or retargets one watched Hunk diff for the checkout. |
-| `review-commit` | `action_review("review-commit")` | Opens or retargets the same pane to Hunk's default `show` target (the last commit). |
-| `send-comments` | `action_send_comments()` | Writes user comments to Markdown and stages one instruction in the selected agent pane. |
+| `review-changes` action | `action_review("review-changes")` | Open or reload this agent's watched Hunk diff. |
+| `review-commit` action | `action_review("review-commit")` | Reload the same pair to Hunk's default `show` target. |
+| `send-comments` action | `action_send_comments()` | Render notes and stage an instruction in the paired agent. |
+| `review` pane | `$HERDR_PLUGIN_ROOT/herdr_hunk.py run-hunk` | Validate the passed target and replace itself with watched Hunk. |
 
-All subprocess calls use argv lists and captured text output. Expected operational
-failures become `PluginError`, print one `herdr-hunk: ...` diagnostic to stderr,
-and exit 1. Invalid invocation syntax exits 2.
+Operational failures become `PluginError`, print one `herdr-hunk: ...`
+diagnostic to stderr, and exit 1. Invalid invocation syntax exits 2.
 
-## Inputs and persistent state
+## Inputs and state
 
-The plugin reads these environment variables:
+The action entrypoints read:
 
-- `HERDR_PLUGIN_CONTEXT_JSON` (required): invocation context. The implementation
-  uses `focused_pane_id`, `focused_pane_cwd`, `focused_pane_agent`,
-  `workspace_id`, `workspace_cwd`, `tab_id`, and the optional `worktree` object.
-- `HERDR_PLUGIN_STATE_DIR` (required): directory for the pane map and rendered
-  review notes.
-- `HERDR_BIN_PATH` (optional): Herdr executable; otherwise `herdr` is resolved on
-  `PATH`.
+- `HERDR_PLUGIN_CONTEXT_JSON`: focused pane, pane/agent/cwd, workspace, tab, and
+  optional worktree metadata;
+- `HERDR_PLUGIN_STATE_DIR`: the pair map and generated review-note files;
+- `HERDR_BIN_PATH`: the running Herdr binary, falling back to `herdr`.
 
-It deliberately does not fall back to legacy ambient pane/workspace variables.
-The focused pane's cwd is preferred over the workspace cwd. Git
-`rev-parse --show-toplevel` turns that directory into the canonical checkout used
-for target calculation, Hunk session lookup, and state keys.
+The internal pane entrypoint additionally reads `HERDR_HUNK_TARGET_JSON`, set by
+the action that opens it. Only non-empty `diff` and `show` argv arrays are
+accepted before `execvp` starts `hunk ... --watch`.
 
-State under `HERDR_PLUGIN_STATE_DIR` is:
+State has this shape:
 
 ```text
 review-panes.json
 notes/
-  <checkout-basename>-<first-12-sha256-of-checkout>.md
+  <checkout-basename>-<pair-digest>.md
 ```
-
-`review-panes.json` maps each checkout path to:
 
 ```json
 {
-  "/path/to/checkout": {
-    "review_pane": "workspace:pane",
-    "origin_pane": "workspace:agent-pane"
-  }
+  "/path/to/checkout": [
+    {
+      "origin_pane": "workspace:agent-pane",
+      "origin_terminal_id": "agent-terminal",
+      "origin_agent_session": {
+        "source": "herdr:agent",
+        "agent": "agent",
+        "kind": "id",
+        "value": "optional native session identity"
+      },
+      "review_pane": "workspace:hunk-pane",
+      "review_terminal_id": "hunk-terminal",
+      "plugin_pane": true,
+      "session_id": "exact Hunk session UUID",
+      "target": ["diff", "merge-base"],
+      "note_targets": {"note-id": ["diff", "merge-base"]},
+      "last_stage": {
+        "digest": "notes-and-instruction digest",
+        "agent_terminal_id": "agent-terminal"
+      }
+    }
+  ]
 }
 ```
 
-`review_pane` is the pane created for Hunk. `origin_pane` is optional and is the
-latest agent pane that invoked a review action for that checkout. A legacy value
-where the record is just a pane-id string is accepted on read. Missing, corrupt,
-or wrongly shaped map data is treated as empty. Writes replace the JSON file
-directly; there is no locking or atomic rename.
+Terminal and native agent-session identity distinguish a live pair from a new
+occupant that happens to reuse the same public pane ID. Pane IDs are refreshed
+from `pane get` after moves. Old IDs still work because Herdr retains moved-pane
+aliases. State writes use a flushed temporary file and atomic `os.replace`.
 
-## Review target selection
+The old checkout-global formats—a pane-ID string or one record object—remain
+readable and are normalized to a one-item list. A legacy record with a known
+origin can be reused, with tab-level focus as its fallback. An origin-less
+legacy Hunk is retained but not silently assigned to whichever agent invokes
+next.
 
-Both review actions first require `hunk` on `PATH`, read the pane context, and
-resolve the checkout.
+## Agent selection and pair identity
 
-`review-commit` always chooses:
+Review invoked from an agent uses that exact pane. Herdr `pane get` supplies the
+terminal and optional native agent-session identity stored with the pair.
+
+Review invoked from an ordinary shell is allowed only when `pane list` reports
+exactly one non-Hunk agent in the current tab. Zero or multiple agents produce
+an actionable error. No `agent list` recency tie-break exists.
+
+Review or comment actions invoked from a recorded Hunk resolve the pair by its
+review terminal. This works when the user moved the Hunk across tabs or
+workspaces and when the process still reports its launch-time pane alias. The
+paired agent is then resolved globally through `pane get`; it need not share the
+Hunk's current workspace.
+
+If the paired agent exits, loses agent identity, changes terminal, or reports a
+different native agent session, the relationship is stale. It is never handed
+to another agent. Invoking review from a current replacement agent discards the
+old occupant's record and creates a new pair on demand.
+
+## Review targets
+
+`review-commit` chooses `show`.
+
+`review-changes` chooses:
+
+1. `diff <merge-base>` for a linked worktree whose parent repo root differs from
+   the checkout; the base is the merge base of the parent checkout's current
+   `HEAD` and the agent checkout's `HEAD`;
+2. plain `diff` outside that case or when either Git lookup fails.
+
+The silent fallback preserves the existing behavior but can review less than
+expected when worktree metadata or Git lookup is incomplete.
+
+## Managed pane and session lifecycle
+
+New Hunk copilots are opened with:
 
 ```text
-hunk show --watch
+herdr plugin pane open
+  --plugin herdr-hunk
+  --entrypoint review
+  --placement split
+  --target-pane <agent-pane>
+  --direction right
+  --cwd <checkout>
+  --env HERDR_HUNK_TARGET_JSON=<target-json>
+  --focus
 ```
 
-`review-changes` chooses one of two targets:
+Because `--cwd` places the managed process in the reviewed checkout, the manifest
+uses Herdr's protected `HERDR_PLUGIN_ROOT` variable to locate the Python script.
+The action lists Hunk sessions before opening, then polls for at most 1.5 seconds.
+It identifies the new session by the Hunk PID in the pane's foreground process
+tree when available, otherwise by the one session ID that appeared after launch.
+A pre-existing manual session therefore does not get adopted and does not
+prevent the plugin session from being recorded.
 
-1. In a linked worktree whose `worktree.repo_root` differs from the resolved
-   checkout, it reads the parent checkout's current `HEAD`, computes that
-   commit's merge base with the linked checkout's `HEAD`, and runs
-   `hunk diff <merge-base> --watch`. This includes committed and uncommitted work
-   in the agent worktree.
-2. Without that context, or if either Git lookup fails, it degrades to
-   `hunk diff --watch`, which reviews only the checkout's working-tree changes.
-
-The fallback is intentionally successful and silent. Consequently, incomplete
-worktree metadata or a failed merge-base calculation can produce an apparently
-valid but incomplete review.
-
-## Review-pane lifecycle
-
-There is at most one plugin-owned review pane per resolved checkout in the state
-map. `review-changes` and `review-commit` share it.
+Reuse follows this state machine:
 
 ```text
-no recorded/live pane
-  -> split invoking pane right, cwd=checkout, focus new pane
-  -> run Hunk with --watch
-  -> remember review pane and optional agent origin
+same agent + live pane + exact session
+  -> capture old target for existing notes when target changes
+  -> hunk session reload <session-id> -- <target> --watch
+  -> focus exact managed pane
 
-recorded pane + live Hunk session
-  -> hunk session reload --repo <checkout> -- <target> --watch
-  -> refresh origin when invoked by an agent
-  -> focus the pane's workspace
+same agent + moved managed pane
+  -> retain its current location
+  -> focus exact pane through plugin pane ownership
+  -> report workspace/tab/pane location when it is no longer beside the agent
 
-recorded pane + no session + idle shell
-  -> run Hunk again in the existing pane
+legacy pane + live session
+  -> reload exact/adopted session
+  -> focus the pane's current tab
 
-recorded pane + Hunk process + no session
-  -> poll session registration every 250 ms for at most 1.5 s
-  -> reload if it appears
-  -> otherwise focus the review workspace and fail without another split
+legacy pane + idle shell
+  -> relaunch Hunk in place and record the resulting session ID
 
-recorded pane + another foreground process
-  -> split a replacement review pane and overwrite the checkout's map entry
+Hunk process still starting + no registered session
+  -> poll without opening another pane
 
-recorded pane no longer known to Herdr
-  -> split a replacement review pane and overwrite the map entry
+missing/replaced Hunk pane or unrelated foreground command
+  -> open a replacement for the same agent
 ```
 
-The split command is `herdr pane split <invoking-pane> --direction right
---cwd <checkout> --focus`. Hunk starts through `herdr pane run`; shell words are
-quoted before being passed to Herdr. If launch fails, the newly split pane is
-closed before the error is surfaced.
+Every reload explicitly restores `--watch`, which Hunk reload otherwise drops.
+Every session command for a known pair uses its session ID, never `--repo`, so
+multiple pairs and manual sessions may share one checkout safely.
 
-Reload always restores `--watch` because Hunk reload drops watch mode. A reused
-review is surfaced with `herdr workspace focus`, using the pane's current
-workspace rather than assuming it stayed beside the invoking agent. There is no
-directional pane-focus CLI call in this flow.
+Managed focus is `herdr plugin pane focus <pane-id>`. If ownership cannot be
+confirmed (principally legacy or migrated state), the plugin falls back to
+`herdr tab focus <tab-id>`. Focus failures after a successful reload are
+reported but do not reverse the reload.
 
-The origin is updated only when `focused_pane_agent` is a non-empty string. An
-invocation from Hunk or an ordinary shell preserves the previous origin rather
-than misattributing authorship.
+## Review target integrity
+
+Hunk retains comments when a session reloads between `diff` and `show`. Before a
+target change, the plugin lists current user notes and maps their IDs to the old
+target. Notes first seen later map to the current target. For Hunk responses
+without a note ID, a digest of stable note content acts as the key.
+
+If comments cannot be read before switching, the pair records uncertainty. Notes
+visible at the next successful handoff are labeled `unknown (review target
+changed before note context was captured)` instead of being silently attributed
+to the new target; notes created afterward use the current target normally.
+Target switching itself remains fluid and is not blocked by existing notes.
 
 ## Sending comments
 
-`send-comments` is a staged handoff, not an automatic agent submission:
+For a known pair, `send-comments`:
 
-1. Resolve the invoking checkout and workspace.
-2. Run `hunk session comment list --repo <checkout> --type user --json`.
-3. Reject a dead session, unreadable response, or empty comment list.
-4. Render all returned comment objects to a checkout-specific Markdown file.
-   Locations prefer the first line of `newRange`, then `oldRange`, then the
-   one-based hunk number, then the file alone. Optional titles become bold text.
-5. List panes in the invoking workspace, retain panes with a truthy `agent`
-   field, and exclude every review pane recorded in plugin state.
-6. Select an agent using the routing order below.
-7. Stage one newline-free instruction with `herdr pane send-text`; do not send
-   Enter or invoke `pane run`.
-8. Best-effort focus the agent with `herdr agent focus` so the user can inspect
-   and submit the staged instruction.
+1. verifies both stored terminal identities and the exact Hunk session;
+2. runs `hunk session comment list <session-id> --type user --json`;
+3. renders checkout, current target, per-note target, file/range, title, and body
+   to a pair-specific Markdown file;
+4. stages one newline-free instruction with `herdr pane send-text` in the paired
+   agent—without Enter or `agent prompt`;
+5. best-effort focuses the paired agent for user approval.
 
-The agent routing precedence is:
+It does not list agents or fall back to another candidate when a known pair is
+stale. This is the core non-misrouting invariant.
 
-1. recorded `origin_pane`, if it is still one of the eligible agents;
-2. invoking pane, if it is an eligible agent;
-3. the sole eligible agent in the same checkout and invoking tab;
-4. the sole eligible agent in the same checkout;
-5. the sole eligible agent in the workspace;
-6. among the narrowest non-empty group above, the pane with the greatest
-   `state_change_seq` from `herdr agent list` (listing order breaks missing/tied
-   sequence data).
+The digest of the complete Markdown body and instruction is stored after a
+successful stage. An identical second invocation rewrites the notes file and
+focuses the agent, but does not append the same instruction again. Changed notes
+produce a new digest and are staged normally.
 
-For the final ambiguous case, the plugin still stages the notes, prints the
-choice, and best-effort shows a no-sound Herdr notification naming the selected
-and passed-over panes. It considers visible, unsubmitted staging safer than
-discarding comments because authorship is uncertain.
+An unmanaged Hunk remains usable. With one repo session, the plugin may select
+it directly. With several, invocation from the Hunk can identify it through its
+pane PID. If neither produces one session, the action stops and names the
+matching session IDs rather than using ambiguous repo selection. Shell routing
+for an unmanaged Hunk still requires exactly one agent in the current tab.
 
-The notes file is overwritten on every send for the same checkout. Comments are
-not cleared from Hunk, so invoking the action again stages the full current set
-again.
+## Narrow-pane behavior
 
-## Important invariants and limitations
+The plugin does not override Hunk's `auto` layout, wrapping, theme, or sidebar.
+The intended escape hatches are Hunk's `w` wrap toggle; `0`/`1`/`2`
+auto/split/stack modes; `s` sidebar toggle; Left/Right horizontal scrolling; and
+Herdr's default `Ctrl+B`, then `z` pane zoom. The plugin does not move a Hunk
+back after a deliberate user move.
 
-- Pane reuse is keyed by checkout, not by workspace, tab, agent, or review type.
-  This conflicts with the intended agent–Hunk pairing. One checkout cannot retain
-  separate copilot panes for agents in different tabs through this plugin.
-- A review pane may move to another workspace; reuse follows and focuses it there.
-- State is plugin-global, while comment agent discovery is restricted to the
-  invoking workspace. A remembered origin in another workspace is not eligible.
-- Any live Hunk session for the checkout is assumed to correspond to the
-  recorded pane. Hunk session lookup is repo-based, not pane-based.
-- A review pane taken over by another command is no longer excluded once its map
-  entry is overwritten by a replacement. The plugin has no pane ownership marker
-  beyond the current state map.
-- `send-comments` accepts every object in Hunk's returned `comments` array; it
-  trusts `--type user` to perform source filtering.
-- Failure to focus after a successful reload or comment staging does not undo or
-  report the completed operation as failed.
-- Hunk is checked before review layout mutation. Git and Hunk launch/reload
-  failures are surfaced; linked-worktree target lookup failures are not.
-- There is no concurrency control around repeated keypresses or state writes.
-  The Hunk registration poll reduces duplicate splits after launch but does not
-  serialize truly simultaneous plugin processes.
+## Limitations
+
+- The pair file uses atomic replacement but no cross-process lock. Truly
+  simultaneous actions can still race and lose one state update.
+- An origin-less legacy review cannot be attributed safely and is not adopted.
+- `send-comments` trusts Hunk's `--type user` filtering and accepts every object
+  in the returned `comments` array.
+- Git target fallback is successful and silent.
+- Focus and notification are best effort after the requested reload/staging has
+  already succeeded.
+- Herdr-managed panes close when their command exits; idle-shell relaunch exists
+  for legacy action-created ordinary panes.
 
 ## Tests and verification seams
 
-The test suite runs the real script as a subprocess against fake `herdr`, `hunk`,
-and `git` executables. Rules match ordered argv subsequences, return scripted
-JSON/errors, and record every call. This verifies the plugin's process boundary
-without opening an interactive terminal UI.
+The subprocess suite runs the real Python script against fake Herdr, Hunk, and
+Git executables. It covers context and Git target resolution, managed pane open
+and exact focus, moved aliases, one pair per agent, stale/replaced identities,
+manual and duplicate Hunk sessions, session-ID reload/comment commands, note
+target preservation, deterministic cross-workspace routing, and duplicate
+staging suppression.
 
-Coverage is organized as follows:
-
-- `tests/test_context.py`: invocation context and executable selection.
-- `tests/test_target.py`: checkout and changeset target resolution.
-- `tests/test_review.py`: open, reuse, reload, relaunch, origin updates, startup
-  races, and pane-count stability.
-- `tests/test_send_comments.py`: note rendering, agent routing, staging, focus,
-  ambiguity, and empty/dead review behavior.
-- `tests/test_failures.py`: missing tools, malformed responses, CLI failures, and
-  layout cleanup.
-
-Run the repository checks with:
+Run:
 
 ```bash
 python3 -m unittest discover -s tests -t .
@@ -254,13 +261,8 @@ ruff check .
 ruff format --check .
 ```
 
-At the time of this research, all 81 tests pass. The orb has Hunk 0.18.1; its
-live `--help` output confirms the `session get`, `session reload`, and
-`session comment list` forms used here. Herdr is not installed in the orb, so
-the Herdr behavior is contract-tested through fakes rather than validated in a
-live Herdr server.
-
-When changing a CLI boundary, inspect the installed command's help and update
-the exact-argv tests. When changing pane semantics, add a lifecycle combination
-to `test_review.py`. When changing agent selection, add the smallest pane-list
-combination that demonstrates the precedence in `test_send_comments.py`.
+Hunk 0.18.1 is installed in the development orb and its live CLI confirms the
+session forms used here. Herdr is not installed in the orb, so Herdr 0.8.0 pane
+ownership, movement, and focus are contract-tested against its documented CLI
+and response shapes. A live Herdr smoke test remains appropriate before a
+release that changes those boundaries.
