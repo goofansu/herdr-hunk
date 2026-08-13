@@ -31,9 +31,14 @@ PANE_MAP_FILE = "review-panes.json"
 NOTES_DIR = "notes"
 HUNK_INSTALL_HINT = "npm install -g hunkdiff"
 
-# How long to let a just-launched Hunk register with its daemon before giving up.
-SESSION_WAIT_ATTEMPTS = 6
-SESSION_WAIT_SECONDS = 0.25
+# A just-launched Hunk takes a moment to register with its daemon. Wait out that
+# gap rather than treating it as "no session" and splitting a duplicate pane.
+# The ceiling is bounded by patience, not by Hunk: this runs on a keypress, and a
+# review that has not appeared within a second and a half should say so rather
+# than sit there. The cost is only paid when our pane is running Hunk and no
+# session has registered, which is either startup or a genuinely broken daemon.
+SESSION_WAIT_TIMEOUT = 1.5
+SESSION_POLL_SECONDS = 0.25
 
 USAGE = "usage: herdr_hunk.py (review | review-commit | send-comments)"
 
@@ -259,18 +264,19 @@ def session_is_live(checkout: str) -> bool:
 
 
 def wait_for_session(checkout: str) -> bool:
-    """Poll briefly for a session that is still registering with Hunk's daemon.
+    """Poll up to ``SESSION_WAIT_TIMEOUT`` for a session that is still registering.
 
     A pane launched moments ago has a running Hunk that the daemon does not know
     about yet. Treating that as "no session" splits a second pane over the first,
     which is how a keybound action shreds a layout.
     """
-    for attempt in range(SESSION_WAIT_ATTEMPTS):
-        if attempt:
-            time.sleep(SESSION_WAIT_SECONDS)
+    deadline = time.monotonic() + SESSION_WAIT_TIMEOUT
+    while True:
         if session_is_live(checkout):
             return True
-    return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(SESSION_POLL_SECONDS)
 
 
 def reload_session(checkout: str, target: list[str]) -> None:
