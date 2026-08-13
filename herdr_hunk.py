@@ -349,6 +349,33 @@ def open_review_pane(invoking_pane: str, checkout: str, target: list[str]) -> st
     return pane_id
 
 
+def remembered_origin(context: dict, previous: str | None) -> str | None:
+    """The invoking pane when it is an agent, otherwise what was already known.
+
+    Reuse is the common path, so an origin written once at open time ages into a
+    lie: it names the pane the review was first opened beside rather than the one
+    being reviewed from now. Refresh it whenever an agent invokes the action, and
+    leave it alone when the caller is the review pane itself or a plain shell.
+    """
+    if _text(context, "focused_pane_agent"):
+        return _text(context, "focused_pane_id")
+    return previous
+
+
+def remember_review(
+    reviews: dict, checkout: str, review_pane: str, context: dict
+) -> None:
+    record = {"review_pane": review_pane}
+    origin = remembered_origin(context, reviews.get(checkout, {}).get("origin_pane"))
+    if origin:
+        # The agent that asked for this review is the one that produced the code,
+        # which is what send-comments needs when a workspace holds several.
+        record["origin_pane"] = origin
+    if reviews.get(checkout) != record:
+        reviews[checkout] = record
+        save_reviews(reviews)
+
+
 def focus_review(review_pane: dict, context: dict) -> None:
     """Surface the review pane. `pane focus` is directional, so focus its workspace."""
     workspace = _text(review_pane, "workspace_id") or _text(context, "workspace_id")
@@ -393,15 +420,13 @@ def action_review(action: str) -> int:
             verb = "relaunched"
 
         if verb:
+            remember_review(reviews, checkout, recorded, context)
             focus_review(review_pane, context)
             print(f"{verb} Hunk review in {recorded}: {' '.join(target)}")
             return 0
 
     pane_id = open_review_pane(invoking_pane, checkout, target)
-    # The pane the review was split from is the one that produced the code, which
-    # is what send-comments needs when a workspace holds more than one agent.
-    reviews[checkout] = {"review_pane": pane_id, "origin_pane": invoking_pane}
-    save_reviews(reviews)
+    remember_review(reviews, checkout, pane_id, context)
     print(f"opened Hunk review in {pane_id}: {' '.join(target)}")
     return 0
 

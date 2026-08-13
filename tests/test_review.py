@@ -45,13 +45,21 @@ class OpenReviewTest(PluginTestCase):
         self.run_plugin("review", self.context())
         self.assertEqual(self.review_panes(), {self.checkout: "w1:p9"})
 
-    def test_the_pane_the_review_was_split_from_is_recorded(self) -> None:
+    def test_the_agent_pane_that_asked_for_the_review_is_recorded(self) -> None:
         """send-comments needs it to know which agent produced the code."""
-        self.run_plugin("review", self.context(focused_pane_id="w1:p4"))
+        self.run_plugin(
+            "review",
+            self.context(focused_pane_id="w1:p4", focused_pane_agent="claude"),
+        )
         self.assertEqual(
             self.pane_map(),
             {self.checkout: {"review_pane": "w1:p9", "origin_pane": "w1:p4"}},
         )
+
+    def test_a_review_opened_from_a_shell_records_no_origin(self) -> None:
+        """A worktree's root pane is an ordinary shell, not the code's author."""
+        self.run_plugin("review", self.context(focused_pane_id="w1:p1"))
+        self.assertEqual(self.pane_map(), {self.checkout: {"review_pane": "w1:p9"}})
 
     def test_a_legacy_single_pane_state_file_is_still_reused(self) -> None:
         self.write_pane_map({self.checkout: "w1:p9"})
@@ -127,6 +135,40 @@ class ReuseReviewTest(PluginTestCase):
         self.assertEqual(len(self.calls_matching("hunk", "reload")), 1)
         for call in self.calls_matching("herdr", "workspace", "focus"):
             self.assertNotIn("", call)
+
+    def test_reusing_a_review_repoints_it_at_the_agent_that_asked(self) -> None:
+        """Two agents share a review pane; the notes must follow the latest caller."""
+        self.seed_pane_map(self.checkout, "w1:p9", origin="w1:pTOP")
+        self.stub_live_pane("w1:p9")
+        self.stub_live_session(True)
+        result = self.run_plugin(
+            "review-commit",
+            self.context(focused_pane_id="w1:pBOTTOM", focused_pane_agent="claude"),
+        )
+        self.assertSucceeded(result)
+        self.assertEqual(self.calls_matching("herdr", "split"), [])
+        self.assertEqual(self.pane_map()[self.checkout]["origin_pane"], "w1:pBOTTOM")
+
+    def test_relaunching_a_review_repoints_it_too(self) -> None:
+        self.seed_pane_map(self.checkout, "w1:p9", origin="w1:pTOP")
+        self.stub_live_pane("w1:p9")
+        self.stub_live_session(False)
+        self.stub_process_info("w1:p9")
+        result = self.run_plugin(
+            "review",
+            self.context(focused_pane_id="w1:pBOTTOM", focused_pane_agent="claude"),
+        )
+        self.assertSucceeded(result)
+        self.assertEqual(self.pane_map()[self.checkout]["origin_pane"], "w1:pBOTTOM")
+
+    def test_reusing_from_the_review_pane_keeps_the_known_origin(self) -> None:
+        """Pressing the key while reading the diff must not forget the author."""
+        self.seed_pane_map(self.checkout, "w1:p9", origin="w1:pTOP")
+        self.stub_live_pane("w1:p9")
+        self.stub_live_session(True)
+        result = self.run_plugin("review", self.context(focused_pane_id="w1:p9"))
+        self.assertSucceeded(result)
+        self.assertEqual(self.pane_map()[self.checkout]["origin_pane"], "w1:pTOP")
 
     def test_a_dead_pane_opens_a_new_review(self) -> None:
         self.seed_pane_map(self.checkout, "w1:p9")
