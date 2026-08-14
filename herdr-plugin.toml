@@ -1,6 +1,6 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "2.0.0"
+version = "1.0.0"
 min_herdr_version = "0.8.0"
 description = "Open a self-closing Hunk diff beside a lone pane"
 platforms = ["linux", "macos"]
