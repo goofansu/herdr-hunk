@@ -27,5 +27,5 @@ description = "review live changes in Hunk"
 key = "prefix+alt+r"
 type = "plugin_action"
 command = "herdr-hunk.review-last-commit"
-description = "review the last commit in Hunk"
+description = "review last commit in Hunk"
 ```
