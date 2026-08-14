@@ -72,6 +72,14 @@ def required_context_value(context: dict, key: str, label: str) -> str:
     return value
 
 
+def notify(title: str, body: str) -> None:
+    run(
+        [herdr_bin(), "notification", "show", title, "--body", body],
+        capture_output=True,
+        text=True,
+    )
+
+
 def review_changes() -> int:
     context = read_context()
     workspace_id = required_context_value(context, "workspace_id", "workspace")
@@ -89,10 +97,12 @@ def review_changes() -> int:
         if isinstance(pane, dict) and pane.get("tab_id") == tab_id
     ]
     if len(current_tab_panes) != 1:
-        raise PluginError(
-            f"review-changes requires exactly one pane in the current tab; "
-            f"found {len(current_tab_panes)}"
+        message = (
+            "Review changes requires exactly one pane in the current tab; "
+            f"found {len(current_tab_panes)}."
         )
+        notify("Hunk review not opened", message)
+        raise PluginError(message)
     if current_tab_panes[0].get("pane_id") != pane_id:
         raise PluginError("the focused pane does not match the current tab's pane")
 

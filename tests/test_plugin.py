@@ -110,7 +110,21 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("review-changes", panes)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("found 2", result.stderr)
-        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(
+            self.calls(),
+            [
+                ["herdr", "pane", "list", "--workspace", "w1"],
+                [
+                    "herdr",
+                    "notification",
+                    "show",
+                    "Hunk review not opened",
+                    "--body",
+                    "Review changes requires exactly one pane in the current "
+                    "tab; found 2.",
+                ],
+            ],
+        )
 
     def test_runs_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-review")
