@@ -15,6 +15,7 @@ install_system_packages() {
   python3 -m pip --version >/dev/null 2>&1 || packages+=(python3-pip)
   command -v git >/dev/null 2>&1 || packages+=(git)
   command -v npm >/dev/null 2>&1 || packages+=(npm)
+  command -v curl >/dev/null 2>&1 || packages+=(curl)
 
   if ((${#packages[@]} == 0)); then
     printf 'System packages are already installed\n'
@@ -52,11 +53,36 @@ install_hunk() {
   npm install --global hunkdiff
 }
 
+install_herdr() {
+  local asset
+
+  if command -v herdr >/dev/null 2>&1 && [[ $(herdr --version) == "herdr 0.8.0" ]]; then
+    printf 'herdr 0.8.0 is already installed\n'
+    return
+  fi
+
+  case "$(dpkg --print-architecture)" in
+    amd64) asset=herdr-linux-x86_64 ;;
+    arm64) asset=herdr-linux-aarch64 ;;
+    *)
+      printf 'Unsupported Herdr architecture: %s\n' "$(dpkg --print-architecture)" >&2
+      return 1
+      ;;
+  esac
+
+  curl --fail --location --retry 3 \
+    "https://github.com/herdrdev/herdr/releases/download/v0.8.0/${asset}" \
+    --output /usr/local/bin/herdr
+  chmod +x /usr/local/bin/herdr
+  [[ $(herdr --version) == "herdr 0.8.0" ]]
+}
+
 step "Install system packages" install_system_packages
 step "Check Python" check_python
 step "Check Git" git --version
 step "Install Ruff" install_ruff
 step "Install Hunk" install_hunk
+step "Install Herdr" install_herdr
 step "Run unit tests" python3 -m unittest discover -s tests -t .
 
 printf 'Orb setup complete.\n'
