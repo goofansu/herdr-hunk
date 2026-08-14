@@ -1,36 +1,23 @@
 # herdr-hunk
 
-Herdr action `herdr-hunk.live-review` opens `hunk diff --watch` in a new right
-pane when the current tab has exactly one pane. Hunk refreshes as the working
-tree changes, and quitting Hunk closes the review pane.
+Opens a Hunk pane that watches for changes and closes when you quit Hunk.
 
-Herdr configuration cannot provide this behavior by itself: a `type = "pane"`
-command closes on exit, but it is always a temporary zoomed pane and keybindings
-cannot test the current tab's pane count. This plugin supplies the condition and
-the persistent right split, then explicitly closes that split.
+## Requirements
 
-Requires Herdr 0.8.0+, Hunk, and Python 3.9+.
+- [Hunk](https://github.com/modem-dev/hunk)
 
-```bash
+## Install
+
+```shell
 herdr plugin install goofansu/herdr-hunk
 ```
 
-Bind the action in `~/.config/herdr/config.toml`:
+## Usage
 
-```toml
+```markdown
 [[keys.command]]
 key = "prefix+ctrl+r"
 type = "plugin_action"
 command = "herdr-hunk.live-review"
 description = "review changes live in Hunk"
-```
-
-Then run `herdr server reload-config`.
-
-## Development
-
-```bash
-python3 -m unittest discover -s tests -t .
-ruff check .
-ruff format --check .
 ```
