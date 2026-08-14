@@ -77,7 +77,7 @@ class PluginTest(unittest.TestCase):
             {"pane_id": "w1:p1", "tab_id": "w1:t1"},
             {"pane_id": "w1:p9", "tab_id": "w1:t2"},
         ]
-        result = self.invoke("review-changes", panes)
+        result = self.invoke("live-review", panes)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.calls()[1],
@@ -107,7 +107,7 @@ class PluginTest(unittest.TestCase):
             {"pane_id": "w1:p1", "tab_id": "w1:t1"},
             {"pane_id": "w1:p2", "tab_id": "w1:t1"},
         ]
-        result = self.invoke("review-changes", panes)
+        result = self.invoke("live-review", panes)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("found 2", result.stderr)
         self.assertEqual(
@@ -120,21 +120,23 @@ class PluginTest(unittest.TestCase):
                     "show",
                     "Hunk review not opened",
                     "--body",
-                    "Review changes requires exactly one pane in the current "
-                    "tab; found 2.",
+                    (
+                        "Review changes requires exactly one pane in the current "
+                        "tab; found 2."
+                    ),
                 ],
             ],
         )
 
-    def test_runs_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
+    def test_runs_watched_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-review")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["hunk", "diff"]])
+        self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 
     def test_propagates_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-review", HUNK_EXIT=7)
         self.assertEqual(result.returncode, 7)
-        self.assertEqual(self.calls(), [["hunk", "diff"]])
+        self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 
 
 if __name__ == "__main__":

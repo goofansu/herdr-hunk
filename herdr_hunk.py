@@ -9,7 +9,7 @@ import sys
 
 PLUGIN_ID = "herdr-hunk"
 REVIEW_ENTRYPOINT = "review"
-USAGE = "usage: herdr_hunk.py (review-changes | run-review)"
+USAGE = "usage: herdr_hunk.py (live-review | run-review)"
 
 
 class PluginError(Exception):
@@ -80,7 +80,7 @@ def notify(title: str, body: str) -> None:
     )
 
 
-def review_changes() -> int:
+def live_review() -> int:
     context = read_context()
     workspace_id = required_context_value(context, "workspace_id", "workspace")
     tab_id = required_context_value(context, "tab_id", "tab")
@@ -138,7 +138,7 @@ def run_review() -> int:
     # Herdr removes a plugin pane when its initial process exits. Let this
     # wrapper end naturally with Hunk instead of explicitly closing the pane;
     # an explicit close races with the runtime's PaneDied event.
-    return run(["hunk", "diff"]).returncode
+    return run(["hunk", "diff", "--watch"]).returncode
 
 
 def main(argv: list[str]) -> int:
@@ -146,8 +146,8 @@ def main(argv: list[str]) -> int:
         print(USAGE, file=sys.stderr)
         return 2
     try:
-        if argv[0] == "review-changes":
-            return review_changes()
+        if argv[0] == "live-review":
+            return live_review()
         if argv[0] == "run-review":
             return run_review()
     except PluginError as error:

@@ -1,16 +1,16 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "1.0.0"
+version = "1.1.0"
 min_herdr_version = "0.8.0"
-description = "Open a self-closing Hunk diff beside a lone pane"
+description = "Open a self-closing live Hunk diff beside a lone pane"
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "review-changes"
-title = "Review changes in Hunk"
-description = "Open hunk diff to the right when this tab has one pane"
+id = "live-review"
+title = "Review changes live in Hunk"
+description = "Open a live Hunk diff to the right when this tab has one pane"
 contexts = ["pane"]
-command = ["python3", "herdr_hunk.py", "review-changes"]
+command = ["python3", "herdr_hunk.py", "live-review"]
 
 [[panes]]
 id = "review"

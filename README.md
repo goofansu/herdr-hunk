@@ -1,7 +1,8 @@
 # herdr-hunk
 
-Herdr action `herdr-hunk.review-changes` opens `hunk diff` in a new right pane
-when the current tab has exactly one pane. Quitting Hunk closes the review pane.
+Herdr action `herdr-hunk.live-review` opens `hunk diff --watch` in a new right
+pane when the current tab has exactly one pane. Hunk refreshes as the working
+tree changes, and quitting Hunk closes the review pane.
 
 Herdr configuration cannot provide this behavior by itself: a `type = "pane"`
 command closes on exit, but it is always a temporary zoomed pane and keybindings
@@ -20,8 +21,8 @@ Bind the action in `~/.config/herdr/config.toml`:
 [[keys.command]]
 key = "prefix+d"
 type = "plugin_action"
-command = "herdr-hunk.review-changes"
-description = "review changes in Hunk"
+command = "herdr-hunk.live-review"
+description = "review changes live in Hunk"
 ```
 
 Then run `herdr server reload-config`.
