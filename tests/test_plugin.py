@@ -112,23 +112,15 @@ class PluginTest(unittest.TestCase):
         self.assertIn("found 2", result.stderr)
         self.assertEqual(len(self.calls()), 1)
 
-    def test_runs_hunk_diff_then_closes_its_own_pane(self) -> None:
-        result = self.invoke("run-review", HERDR_PANE_ID="w1:p2")
+    def test_runs_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
+        result = self.invoke("run-review")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            self.calls(),
-            [
-                ["hunk", "diff"],
-                ["herdr", "plugin", "pane", "close", "w1:p2"],
-            ],
-        )
+        self.assertEqual(self.calls(), [["hunk", "diff"]])
 
-    def test_closes_the_pane_when_hunk_fails(self) -> None:
-        result = self.invoke("run-review", HERDR_PANE_ID="w1:p2", HUNK_EXIT=7)
+    def test_propagates_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
+        result = self.invoke("run-review", HUNK_EXIT=7)
         self.assertEqual(result.returncode, 7)
-        self.assertEqual(
-            self.calls()[-1], ["herdr", "plugin", "pane", "close", "w1:p2"]
-        )
+        self.assertEqual(self.calls(), [["hunk", "diff"]])
 
 
 if __name__ == "__main__":

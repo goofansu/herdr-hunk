@@ -125,26 +125,10 @@ def review_changes() -> int:
 
 
 def run_review() -> int:
-    pane_id = os.environ.get("HERDR_PANE_ID")
-    if not pane_id:
-        raise PluginError("HERDR_PANE_ID is not set")
-
-    status = 1
-    try:
-        status = run(["hunk", "diff"]).returncode
-    finally:
-        # Closing this pane can terminate this process before the CLI response
-        # arrives, so cleanup is intentionally fire-and-forget.
-        try:
-            subprocess.run(
-                [herdr_bin(), "plugin", "pane", "close", pane_id],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        except OSError:
-            pass
-    return status
+    # Herdr removes a plugin pane when its initial process exits. Let this
+    # wrapper end naturally with Hunk instead of explicitly closing the pane;
+    # an explicit close races with the runtime's PaneDied event.
+    return run(["hunk", "diff"]).returncode
 
 
 def main(argv: list[str]) -> int:
