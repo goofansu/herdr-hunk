@@ -19,7 +19,7 @@ Bind the action in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+d"
+key = "prefix+ctrl+r"
 type = "plugin_action"
 command = "herdr-hunk.live-review"
 description = "review changes live in Hunk"
