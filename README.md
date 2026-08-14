@@ -24,7 +24,7 @@ command = "herdr-hunk.review-live-changes"
 description = "review live changes in Hunk"
 
 [[keys.command]]
-key = "prefix+ctrl+s"
+key = "prefix+alt+r"
 type = "plugin_action"
 command = "herdr-hunk.review-last-commit"
 description = "review the last commit in Hunk"

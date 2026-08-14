@@ -21,7 +21,7 @@ command = ["python3", "herdr_hunk.py", "review-last-commit"]
 
 [[panes]]
 id = "review"
-title = "Hunk review"
+title = "Hunk live changes review"
 placement = "split"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-review"]
 
