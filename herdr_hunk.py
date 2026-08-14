@@ -12,7 +12,8 @@ LIVE_REVIEW_ENTRYPOINT = "review"
 LAST_COMMIT_ENTRYPOINT = "last-commit-review"
 USAGE = (
     "usage: herdr_hunk.py "
-    "(review-live-changes | review-last-commit | run-review | run-last-commit-review)"
+    "(review-live-changes | review-last-commit | run-live-changes-review | "
+    "run-last-commit-review)"
 )
 
 
@@ -163,7 +164,7 @@ def main(argv: list[str]) -> int:
             return review_live_changes()
         if argv[0] == "review-last-commit":
             return review_last_commit()
-        if argv[0] == "run-review":
+        if argv[0] == "run-live-changes-review":
             return run_review(["diff", "--watch"])
         if argv[0] == "run-last-commit-review":
             return run_review(["show"])

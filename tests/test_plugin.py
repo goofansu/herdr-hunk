@@ -156,7 +156,7 @@ class PluginTest(unittest.TestCase):
         )
 
     def test_runs_watched_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
-        result = self.invoke("run-review")
+        result = self.invoke("run-live-changes-review")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 
@@ -166,7 +166,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(self.calls(), [["hunk", "show"]])
 
     def test_propagates_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
-        result = self.invoke("run-review", HUNK_EXIT=7)
+        result = self.invoke("run-live-changes-review", HUNK_EXIT=7)
         self.assertEqual(result.returncode, 7)
         self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 
