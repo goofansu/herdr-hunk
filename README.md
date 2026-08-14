@@ -20,8 +20,8 @@ Bind either review workflow independently:
 [[keys.command]]
 key = "prefix+ctrl+r"
 type = "plugin_action"
-command = "herdr-hunk.live-review"
-description = "review changes live in Hunk"
+command = "herdr-hunk.review-live-changes"
+description = "review live changes in Hunk"
 
 [[keys.command]]
 key = "prefix+ctrl+s"
