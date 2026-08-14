@@ -1,6 +1,6 @@
 # herdr-hunk
 
-Opens a Hunk pane that watches for changes and closes when you quit Hunk.
+Opens a Hunk pane for live changes or the last commit and closes it when you quit Hunk.
 
 ## Requirements
 
@@ -14,10 +14,18 @@ herdr plugin install goofansu/herdr-hunk
 
 ## Usage
 
-```markdown
+Bind either review workflow independently:
+
+```toml
 [[keys.command]]
 key = "prefix+ctrl+r"
 type = "plugin_action"
 command = "herdr-hunk.live-review"
 description = "review changes live in Hunk"
+
+[[keys.command]]
+key = "prefix+ctrl+s"
+type = "plugin_action"
+command = "herdr-hunk.review-last-commit"
+description = "review the last commit in Hunk"
 ```

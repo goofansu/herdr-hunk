@@ -102,6 +102,33 @@ class PluginTest(unittest.TestCase):
             ],
         )
 
+    def test_opens_last_commit_review_in_a_right_split(self) -> None:
+        panes = [{"pane_id": "w1:p1", "tab_id": "w1:t1"}]
+        result = self.invoke("review-last-commit", panes)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.calls()[1],
+            [
+                "herdr",
+                "plugin",
+                "pane",
+                "open",
+                "--plugin",
+                "herdr-hunk",
+                "--entrypoint",
+                "last-commit-review",
+                "--placement",
+                "split",
+                "--target-pane",
+                "w1:p1",
+                "--direction",
+                "right",
+                "--cwd",
+                "/work/tree with spaces",
+                "--focus",
+            ],
+        )
+
     def test_refuses_to_open_when_the_current_tab_has_two_panes(self) -> None:
         panes = [
             {"pane_id": "w1:p1", "tab_id": "w1:t1"},
@@ -132,6 +159,11 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("run-review")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
+
+    def test_runs_hunk_show_for_last_commit(self) -> None:
+        result = self.invoke("run-last-commit-review")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [["hunk", "show"]])
 
     def test_propagates_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-review", HUNK_EXIT=7)

@@ -1,8 +1,8 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "1.1.0"
+version = "1.2.0"
 min_herdr_version = "0.8.0"
-description = "Opens a Hunk pane that watches for changes and closes when you quit Hunk"
+description = "Opens a Hunk pane for live changes or the last commit and closes when you quit Hunk"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -12,8 +12,21 @@ description = "Open a Hunk pane to the right that watches changes and closes whe
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "live-review"]
 
+[[actions]]
+id = "review-last-commit"
+title = "Review last commit in Hunk"
+description = "Open a Hunk pane to the right showing the last commit and close it when you quit Hunk"
+contexts = ["pane"]
+command = ["python3", "herdr_hunk.py", "review-last-commit"]
+
 [[panes]]
 id = "review"
 title = "Hunk review"
 placement = "split"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-review"]
+
+[[panes]]
+id = "last-commit-review"
+title = "Hunk last commit review"
+placement = "split"
+command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-last-commit-review"]

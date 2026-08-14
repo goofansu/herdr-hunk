@@ -1,4 +1,4 @@
-"""Open a self-closing Hunk diff beside a lone Herdr pane."""
+"""Open a self-closing Hunk review beside a lone Herdr pane."""
 
 from __future__ import annotations
 
@@ -8,8 +8,12 @@ import subprocess
 import sys
 
 PLUGIN_ID = "herdr-hunk"
-REVIEW_ENTRYPOINT = "review"
-USAGE = "usage: herdr_hunk.py (live-review | run-review)"
+LIVE_REVIEW_ENTRYPOINT = "review"
+LAST_COMMIT_ENTRYPOINT = "last-commit-review"
+USAGE = (
+    "usage: herdr_hunk.py "
+    "(live-review | review-last-commit | run-review | run-last-commit-review)"
+)
 
 
 class PluginError(Exception):
@@ -80,7 +84,8 @@ def notify(title: str, body: str) -> None:
     )
 
 
-def live_review() -> int:
+def open_review(entrypoint: str, action_title: str) -> int:
+    """Open a review pane while hiding Herdr's layout and context plumbing."""
     context = read_context()
     workspace_id = required_context_value(context, "workspace_id", "workspace")
     tab_id = required_context_value(context, "tab_id", "tab")
@@ -98,7 +103,7 @@ def live_review() -> int:
     ]
     if len(current_tab_panes) != 1:
         message = (
-            "Review changes requires exactly one pane in the current tab; "
+            f"{action_title} requires exactly one pane in the current tab; "
             f"found {len(current_tab_panes)}."
         )
         notify("Hunk review not opened", message)
@@ -115,7 +120,7 @@ def live_review() -> int:
             "--plugin",
             PLUGIN_ID,
             "--entrypoint",
-            REVIEW_ENTRYPOINT,
+            entrypoint,
             "--placement",
             "split",
             "--target-pane",
@@ -134,11 +139,19 @@ def live_review() -> int:
     return 0
 
 
-def run_review() -> int:
+def live_review() -> int:
+    return open_review(LIVE_REVIEW_ENTRYPOINT, "Review changes")
+
+
+def review_last_commit() -> int:
+    return open_review(LAST_COMMIT_ENTRYPOINT, "Review last commit")
+
+
+def run_review(hunk_args: list[str]) -> int:
     # Herdr removes a plugin pane when its initial process exits. Let this
     # wrapper end naturally with Hunk instead of explicitly closing the pane;
     # an explicit close races with the runtime's PaneDied event.
-    return run(["hunk", "diff", "--watch"]).returncode
+    return run(["hunk", *hunk_args]).returncode
 
 
 def main(argv: list[str]) -> int:
@@ -148,8 +161,12 @@ def main(argv: list[str]) -> int:
     try:
         if argv[0] == "live-review":
             return live_review()
+        if argv[0] == "review-last-commit":
+            return review_last_commit()
         if argv[0] == "run-review":
-            return run_review()
+            return run_review(["diff", "--watch"])
+        if argv[0] == "run-last-commit-review":
+            return run_review(["show"])
     except PluginError as error:
         print(f"herdr-hunk: {error}", file=sys.stderr)
         return 1
