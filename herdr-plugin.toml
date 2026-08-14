@@ -2,7 +2,7 @@ id = "herdr-hunk"
 name = "Hunk Review"
 version = "1.0.0"
 min_herdr_version = "0.8.0"
-description = "Opens a Hunk pane for live changes or the last commit and closes when you quit Hunk"
+description = "Review live changes or the last commit in Hunk"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -15,7 +15,7 @@ command = ["python3", "herdr_hunk.py", "review-live-changes"]
 [[actions]]
 id = "review-last-commit"
 title = "Review last commit in Hunk"
-description = "Open a Hunk pane to the right showing the last commit and close it when you quit Hunk"
+description = "Open a Hunk pane to the right that shows the last commit and closes when you quit Hunk"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-last-commit"]
 
