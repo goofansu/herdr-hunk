@@ -1,6 +1,6 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "1.2.0"
+version = "1.0.0"
 min_herdr_version = "0.8.0"
 description = "Opens a Hunk pane for live changes or the last commit and closes when you quit Hunk"
 platforms = ["linux", "macos"]
