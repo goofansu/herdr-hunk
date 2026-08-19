@@ -12,6 +12,14 @@ UNCOMMITTED_REVIEW_ENTRYPOINT = "uncommitted-review"
 LAST_COMMIT_ENTRYPOINT = "last-commit-review"
 BRANCH_REVIEW_ENTRYPOINT = "branch-review"
 REVIEW_BASE_ENV = "HERDR_HUNK_REVIEW_BASE"
+PANE_COMMANDS = frozenset(
+    {
+        "run-uncommitted-changes-review",
+        "run-last-commit-review",
+        "run-branch-changes-review",
+    }
+)
+FAILURE_TITLE = "Hunk review failed"
 REMOTE_HEAD_REF = "refs/remotes/origin/HEAD"
 LOCAL_DEFAULT_REFS = ("refs/heads/main", "refs/heads/master")
 USAGE = (
@@ -74,6 +82,16 @@ def notify(title: str, body: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def review_failed(message: str) -> None:
+    """Report a failure from inside a review pane, which closes along with it.
+
+    Herdr removes the pane the moment this process exits, taking Hunk's own
+    output and our stderr line with it, so the notification is the only part a
+    failure leaves behind.
+    """
+    notify(FAILURE_TITLE, message)
 
 
 def not_opened(message: str) -> PluginError:
@@ -184,7 +202,16 @@ def run_review(hunk_args: list[str]) -> int:
     # Herdr removes a plugin pane when its initial process exits. Let this
     # wrapper end naturally with Hunk instead of explicitly closing the pane;
     # an explicit close races with the runtime's PaneDied event.
-    return run(["hunk", *hunk_args]).returncode
+    status = run(["hunk", *hunk_args]).returncode
+    if status < 0:
+        # A signal ended Hunk, which is how a pane the reviewer closed
+        # themselves looks, so it is not a failure to report. Hand back the
+        # status a shell would report instead of a negative one, which would
+        # wrap into an unrelated exit code.
+        return 128 - status
+    if status > 0:
+        review_failed(f"Hunk exited with status {status}.")
+    return status
 
 
 def run_branch_review() -> int:
@@ -214,6 +241,8 @@ def main(argv: list[str]) -> int:
         if argv[0] == "run-branch-changes-review":
             return run_branch_review()
     except PluginError as error:
+        if argv[0] in PANE_COMMANDS:
+            review_failed(str(error))
         print(f"herdr-hunk: {error}", file=sys.stderr)
         return 1
     print(f"herdr-hunk: unknown command {argv[0]!r}\n{USAGE}", file=sys.stderr)

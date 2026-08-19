@@ -47,6 +47,9 @@ if program == "git":
         print(merge_base)
         sys.exit(0)
 if program == "hunk":
+    signal = os.environ.get("HUNK_SIGNAL")
+    if signal:
+        os.kill(os.getpid(), int(signal))
     sys.exit(int(os.environ.get("HUNK_EXIT", "0")))
 sys.exit(int(os.environ.get("HERDR_EXIT", "0")))
 """
@@ -115,15 +118,13 @@ class PluginTest(unittest.TestCase):
             *settings,
         ]
 
-    def notification(self, body: str) -> list[str]:
-        return [
-            "herdr",
-            "notification",
-            "show",
-            "Hunk review not opened",
-            "--body",
-            body,
-        ]
+    def notification(
+        self, body: str, title: str = "Hunk review not opened"
+    ) -> list[str]:
+        return ["herdr", "notification", "show", title, "--body", body]
+
+    def failure(self, body: str) -> list[str]:
+        return self.notification(body, title="Hunk review failed")
 
     def test_opens_hunk_without_inspecting_the_current_tab_layout(self) -> None:
         result = self.invoke("review-uncommitted-changes")
@@ -163,10 +164,26 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [["hunk", "show"]])
 
-    def test_propagates_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
+    def test_notifies_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-uncommitted-changes-review", HUNK_EXIT=7)
         self.assertEqual(result.returncode, 7)
-        self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
+        self.assertEqual(
+            self.calls(),
+            [
+                ["hunk", "diff", "--watch"],
+                self.failure("Hunk exited with status 7."),
+            ],
+        )
+
+    def test_notifies_when_hunk_is_not_installed(self) -> None:
+        os.remove(os.path.join(self.bin, "hunk"))
+        result = self.invoke("run-uncommitted-changes-review")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not run hunk", result.stderr)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.calls()[0][:3], ["herdr", "notification", "show"])
+        self.assertEqual(self.calls()[0][3], "Hunk review failed")
+        self.assertIn("could not run hunk", self.calls()[0][-1])
 
     def test_opens_branch_review_with_the_merge_base_in_the_pane_environment(
         self,
@@ -298,16 +315,32 @@ class PluginTest(unittest.TestCase):
                 result = self.invoke("run-branch-changes-review", **base)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("HERDR_HUNK_REVIEW_BASE is not set", result.stderr)
-                self.assertEqual(self.calls(), [])
+                # Both rounds append to one call log, so read the latest.
+                self.assertEqual(
+                    self.calls()[-1],
+                    self.failure("HERDR_HUNK_REVIEW_BASE is not set"),
+                )
 
-    def test_propagates_hunk_failure_from_the_branch_review(self) -> None:
+    def test_notifies_hunk_failure_from_the_branch_review(self) -> None:
         result = self.invoke(
             "run-branch-changes-review",
             HERDR_HUNK_REVIEW_BASE="mergebasecommit",
             HUNK_EXIT=7,
         )
         self.assertEqual(result.returncode, 7)
-        self.assertEqual(self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]])
+        self.assertEqual(
+            self.calls(),
+            [
+                ["hunk", "diff", "mergebasecommit", "--watch"],
+                self.failure("Hunk exited with status 7."),
+            ],
+        )
+
+    def test_reports_nothing_when_a_signal_ends_hunk(self) -> None:
+        """A pane the reviewer closed kills Hunk, which is not a failure."""
+        result = self.invoke("run-uncommitted-changes-review", HUNK_SIGNAL="15")
+        self.assertEqual(result.returncode, 143)
+        self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 
 
 if __name__ == "__main__":
