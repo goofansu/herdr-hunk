@@ -1,6 +1,6 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "1.0.0"
+version = "1.0.1"
 min_herdr_version = "0.8.0"
 description = "Review live changes or the last commit in Hunk"
 platforms = ["linux", "macos"]
