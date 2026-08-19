@@ -1,4 +1,4 @@
-"""Open a self-closing Hunk review beside a lone Herdr pane."""
+"""Open a self-closing Hunk review beside a Herdr pane."""
 
 from __future__ import annotations
 
@@ -56,20 +56,6 @@ def read_context() -> dict:
     return context
 
 
-def herdr_json(args: list[str]) -> dict:
-    result = run([herdr_bin(), *args], capture_output=True, text=True)
-    if result.returncode != 0:
-        raise PluginError(f"herdr {' '.join(args)} failed: {diagnostic(result)}")
-    try:
-        response = json.loads(result.stdout)
-        payload = response["result"]
-    except (ValueError, KeyError, TypeError) as error:
-        raise PluginError(f"herdr {' '.join(args)} returned invalid JSON") from error
-    if not isinstance(payload, dict):
-        raise PluginError(f"herdr {' '.join(args)} returned an invalid result")
-    return payload
-
-
 def required_context_value(context: dict, key: str, label: str) -> str:
     value = text(context.get(key))
     if not value:
@@ -99,34 +85,13 @@ def require_git_repository(cwd: str) -> None:
     raise PluginError(message)
 
 
-def open_review(entrypoint: str, action_title: str) -> int:
+def open_review(entrypoint: str) -> int:
     """Open a review pane while hiding Herdr's layout and context plumbing."""
     context = read_context()
-    workspace_id = required_context_value(context, "workspace_id", "workspace")
-    tab_id = required_context_value(context, "tab_id", "tab")
     pane_id = required_context_value(context, "focused_pane_id", "focused pane")
     cwd = required_context_value(context, "focused_pane_cwd", "focused pane cwd")
 
     require_git_repository(cwd)
-
-    payload = herdr_json(["pane", "list", "--workspace", workspace_id])
-    panes = payload.get("panes")
-    if not isinstance(panes, list):
-        raise PluginError("herdr pane list returned no panes")
-    current_tab_panes = [
-        pane
-        for pane in panes
-        if isinstance(pane, dict) and pane.get("tab_id") == tab_id
-    ]
-    if len(current_tab_panes) != 1:
-        message = (
-            f"{action_title} requires exactly one pane in the current tab; "
-            f"found {len(current_tab_panes)}."
-        )
-        notify("Hunk review not opened", message)
-        raise PluginError(message)
-    if current_tab_panes[0].get("pane_id") != pane_id:
-        raise PluginError("the focused pane does not match the current tab's pane")
 
     result = run(
         [
@@ -138,15 +103,10 @@ def open_review(entrypoint: str, action_title: str) -> int:
             PLUGIN_ID,
             "--entrypoint",
             entrypoint,
-            "--placement",
-            "split",
             "--target-pane",
             pane_id,
-            "--direction",
-            "right",
             "--cwd",
             cwd,
-            "--focus",
         ],
         capture_output=True,
         text=True,
@@ -157,11 +117,11 @@ def open_review(entrypoint: str, action_title: str) -> int:
 
 
 def review_live_changes() -> int:
-    return open_review(LIVE_REVIEW_ENTRYPOINT, "Review live changes")
+    return open_review(LIVE_REVIEW_ENTRYPOINT)
 
 
 def review_last_commit() -> int:
-    return open_review(LAST_COMMIT_ENTRYPOINT, "Review last commit")
+    return open_review(LAST_COMMIT_ENTRYPOINT)
 
 
 def run_review(hunk_args: list[str]) -> int:
