@@ -132,13 +132,13 @@ class PluginTest(unittest.TestCase):
         ]
 
     def test_opens_hunk_without_inspecting_the_current_tab_layout(self) -> None:
-        result = self.invoke("review-live-changes")
+        result = self.invoke("review-uncommitted-changes")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.calls(),
             [
                 self.git_query("rev-parse", "--is-inside-work-tree"),
-                self.pane_open("review"),
+                self.pane_open("uncommitted-review"),
             ],
         )
 
@@ -148,7 +148,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(self.calls()[1], self.pane_open("last-commit-review"))
 
     def test_notifies_instead_of_opening_hunk_outside_a_git_repository(self) -> None:
-        result = self.invoke("review-live-changes", GIT_EXIT=128, GIT_INSIDE="")
+        result = self.invoke("review-uncommitted-changes", GIT_EXIT=128, GIT_INSIDE="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
         self.assertEqual(
@@ -160,7 +160,7 @@ class PluginTest(unittest.TestCase):
         )
 
     def test_runs_watched_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
-        result = self.invoke("run-live-changes-review")
+        result = self.invoke("run-uncommitted-changes-review")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 
@@ -170,7 +170,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(self.calls(), [["hunk", "show"]])
 
     def test_propagates_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
-        result = self.invoke("run-live-changes-review", HUNK_EXIT=7)
+        result = self.invoke("run-uncommitted-changes-review", HUNK_EXIT=7)
         self.assertEqual(result.returncode, 7)
         self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
 

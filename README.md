@@ -1,6 +1,6 @@
 # herdr-hunk
 
-Opens a Hunk pane for live changes, the last commit, or everything this branch changed, and closes it when you quit Hunk.
+Opens a Hunk pane for uncommitted changes, the last commit, or everything this branch changed, and closes it when you quit Hunk.
 
 ## Requirements
 
@@ -20,8 +20,8 @@ Bind each review workflow independently:
 [[keys.command]]
 key = "prefix+ctrl+r"
 type = "plugin_action"
-command = "herdr-hunk.review-live-changes"
-description = "review live changes in Hunk"
+command = "herdr-hunk.review-uncommitted-changes"
+description = "review uncommitted changes in Hunk"
 
 [[keys.command]]
 key = "prefix+alt+r"

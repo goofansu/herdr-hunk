@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 PLUGIN_ID = "herdr-hunk"
-LIVE_REVIEW_ENTRYPOINT = "review"
+UNCOMMITTED_REVIEW_ENTRYPOINT = "uncommitted-review"
 LAST_COMMIT_ENTRYPOINT = "last-commit-review"
 BRANCH_REVIEW_ENTRYPOINT = "branch-review"
 REVIEW_BASE_ENV = "HERDR_HUNK_REVIEW_BASE"
@@ -16,8 +16,8 @@ REMOTE_HEAD_REF = "refs/remotes/origin/HEAD"
 LOCAL_DEFAULT_REFS = ("refs/heads/main", "refs/heads/master")
 USAGE = (
     "usage: herdr_hunk.py "
-    "(review-live-changes | review-last-commit | review-branch-changes | "
-    "run-live-changes-review | run-last-commit-review | "
+    "(review-uncommitted-changes | review-last-commit | review-branch-changes | "
+    "run-uncommitted-changes-review | run-last-commit-review | "
     "run-branch-changes-review)"
 )
 
@@ -176,9 +176,9 @@ def open_review(entrypoint: str, pane_id: str, cwd: str, *env: str) -> int:
     return 0
 
 
-def review_live_changes() -> int:
+def review_uncommitted_changes() -> int:
     pane_id, cwd = review_target()
-    return open_review(LIVE_REVIEW_ENTRYPOINT, pane_id, cwd)
+    return open_review(UNCOMMITTED_REVIEW_ENTRYPOINT, pane_id, cwd)
 
 
 def review_last_commit() -> int:
@@ -215,13 +215,13 @@ def main(argv: list[str]) -> int:
         print(USAGE, file=sys.stderr)
         return 2
     try:
-        if argv[0] == "review-live-changes":
-            return review_live_changes()
+        if argv[0] == "review-uncommitted-changes":
+            return review_uncommitted_changes()
         if argv[0] == "review-last-commit":
             return review_last_commit()
         if argv[0] == "review-branch-changes":
             return review_branch_changes()
-        if argv[0] == "run-live-changes-review":
+        if argv[0] == "run-uncommitted-changes-review":
             return run_review(["diff", "--watch"])
         if argv[0] == "run-last-commit-review":
             return run_review(["show"])

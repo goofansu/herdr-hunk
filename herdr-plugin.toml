@@ -1,16 +1,16 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "1.0.2"
+version = "1.1.0"
 min_herdr_version = "0.8.0"
-description = "Review live changes, the last commit, or branch changes in Hunk"
+description = "Review uncommitted changes, the last commit, or branch changes in Hunk"
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "review-live-changes"
-title = "Review live changes in Hunk"
-description = "Open a Hunk pane to the right that watches changes and closes when you quit Hunk"
+id = "review-uncommitted-changes"
+title = "Review uncommitted changes in Hunk"
+description = "Open a Hunk pane to the right that watches uncommitted changes and closes when you quit Hunk"
 contexts = ["pane"]
-command = ["python3", "herdr_hunk.py", "review-live-changes"]
+command = ["python3", "herdr_hunk.py", "review-uncommitted-changes"]
 
 [[actions]]
 id = "review-last-commit"
@@ -27,10 +27,10 @@ contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-branch-changes"]
 
 [[panes]]
-id = "review"
-title = "Hunk live changes review"
+id = "uncommitted-review"
+title = "Hunk uncommitted changes review"
 placement = "split"
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-live-changes-review"]
+command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-uncommitted-changes-review"]
 
 [[panes]]
 id = "last-commit-review"
