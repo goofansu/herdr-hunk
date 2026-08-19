@@ -85,6 +85,20 @@ def notify(title: str, body: str) -> None:
     )
 
 
+def require_git_repository(cwd: str) -> None:
+    result = run(
+        ["git", "-C", cwd, "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip() == "true":
+        return
+
+    message = f"[{cwd}] is not a Git repository."
+    notify("Hunk review not opened", message)
+    raise PluginError(message)
+
+
 def open_review(entrypoint: str, action_title: str) -> int:
     """Open a review pane while hiding Herdr's layout and context plumbing."""
     context = read_context()
@@ -92,6 +106,8 @@ def open_review(entrypoint: str, action_title: str) -> int:
     tab_id = required_context_value(context, "tab_id", "tab")
     pane_id = required_context_value(context, "focused_pane_id", "focused pane")
     cwd = required_context_value(context, "focused_pane_cwd", "focused pane cwd")
+
+    require_git_repository(cwd)
 
     payload = herdr_json(["pane", "list", "--workspace", workspace_id])
     panes = payload.get("panes")

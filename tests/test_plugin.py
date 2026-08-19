@@ -20,6 +20,9 @@ program = {program!r}
 with open(os.environ["CALL_LOG"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps([program, *sys.argv[1:]]) + "\n")
 
+if program == "git" and sys.argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
+    print(os.environ.get("GIT_INSIDE", "true"))
+    sys.exit(int(os.environ.get("GIT_EXIT", "0")))
 if program == "herdr" and sys.argv[1:3] == ["pane", "list"]:
     panes = json.loads(os.environ.get("PANES", "[]"))
     print(json.dumps({{"result": {{"panes": panes}}}}))
@@ -36,7 +39,7 @@ class PluginTest(unittest.TestCase):
         self.bin = os.path.join(self.tmp, "bin")
         os.mkdir(self.bin)
         self.log = os.path.join(self.tmp, "calls.jsonl")
-        for program in ("herdr", "hunk"):
+        for program in ("git", "herdr", "hunk"):
             path = os.path.join(self.bin, program)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(FAKE.format(python=sys.executable, program=program))
@@ -80,7 +83,7 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("review-live-changes", panes)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.calls()[1],
+            self.calls()[2],
             [
                 "herdr",
                 "plugin",
@@ -107,7 +110,7 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("review-last-commit", panes)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.calls()[1],
+            self.calls()[2],
             [
                 "herdr",
                 "plugin",
@@ -140,6 +143,13 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(
             self.calls(),
             [
+                [
+                    "git",
+                    "-C",
+                    "/work/tree with spaces",
+                    "rev-parse",
+                    "--is-inside-work-tree",
+                ],
                 ["herdr", "pane", "list", "--workspace", "w1"],
                 [
                     "herdr",
@@ -151,6 +161,32 @@ class PluginTest(unittest.TestCase):
                         "Review live changes requires exactly one pane in the "
                         "current tab; found 2."
                     ),
+                ],
+            ],
+        )
+
+    def test_notifies_instead_of_opening_hunk_outside_a_git_repository(self) -> None:
+        panes = [{"pane_id": "w1:p1", "tab_id": "w1:t1"}]
+        result = self.invoke("review-live-changes", panes, GIT_EXIT=128, GIT_INSIDE="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[/work/tree with spaces] is not a Git repository", result.stderr)
+        self.assertEqual(
+            self.calls(),
+            [
+                [
+                    "git",
+                    "-C",
+                    "/work/tree with spaces",
+                    "rev-parse",
+                    "--is-inside-work-tree",
+                ],
+                [
+                    "herdr",
+                    "notification",
+                    "show",
+                    "Hunk review not opened",
+                    "--body",
+                    "[/work/tree with spaces] is not a Git repository.",
                 ],
             ],
         )
