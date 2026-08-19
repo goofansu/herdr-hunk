@@ -46,12 +46,6 @@ if program == "git":
             sys.exit(1)
         print(merge_base)
         sys.exit(0)
-    if query == ["rev-parse", "HEAD"]:
-        print(os.environ.get("GIT_HEAD", "headcommit"))
-        sys.exit(0)
-    if query == ["status", "--porcelain"]:
-        sys.stdout.write(os.environ.get("GIT_STATUS", ""))
-        sys.exit(int(os.environ.get("GIT_STATUS_EXIT", "0")))
 if program == "hunk":
     sys.exit(int(os.environ.get("HUNK_EXIT", "0")))
 sys.exit(int(os.environ.get("HERDR_EXIT", "0")))
@@ -185,7 +179,6 @@ class PluginTest(unittest.TestCase):
                 self.git_query("rev-parse", "--is-inside-work-tree"),
                 self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
                 self.git_query("merge-base", "refs/remotes/origin/main", "HEAD"),
-                self.git_query("rev-parse", "HEAD"),
                 self.pane_open(
                     "branch-review",
                     "HERDR_HUNK_REVIEW_BASE=mergebasecommit",
@@ -265,65 +258,12 @@ class PluginTest(unittest.TestCase):
             ),
         )
 
-    def test_notifies_instead_of_opening_an_empty_branch_review(self) -> None:
-        result = self.invoke(
-            "review-branch-changes",
-            GIT_MERGE_BASE="samecommit",
-            GIT_HEAD="samecommit",
-            GIT_STATUS="",
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            f"[{CWD}] has no changes since refs/remotes/origin/main", result.stderr
-        )
-        self.assertEqual(
-            self.calls(),
-            [
-                self.git_query("rev-parse", "--is-inside-work-tree"),
-                self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
-                self.git_query("merge-base", "refs/remotes/origin/main", "HEAD"),
-                self.git_query("rev-parse", "HEAD"),
-                self.git_query("status", "--porcelain"),
-                self.notification(
-                    f"[{CWD}] has no changes since refs/remotes/origin/main."
-                ),
-            ],
-        )
-
-    def test_opens_branch_review_at_the_default_branch_with_uncommitted_changes(
-        self,
-    ) -> None:
-        result = self.invoke(
-            "review-branch-changes",
-            GIT_MERGE_BASE="samecommit",
-            GIT_HEAD="samecommit",
-            GIT_STATUS=" M herdr_hunk.py\n",
-        )
+    def test_opens_branch_review_when_the_branch_has_nothing_of_its_own(self) -> None:
+        result = self.invoke("review-branch-changes", GIT_MERGE_BASE="samecommit")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.calls()[-2:],
-            [
-                self.git_query("status", "--porcelain"),
-                self.pane_open("branch-review", "HERDR_HUNK_REVIEW_BASE=samecommit"),
-            ],
-        )
-
-    def test_notifies_when_uncommitted_changes_cannot_be_checked(self) -> None:
-        result = self.invoke(
-            "review-branch-changes",
-            GIT_MERGE_BASE="samecommit",
-            GIT_HEAD="samecommit",
-            GIT_STATUS_EXIT=128,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            f"[{CWD}] could not be checked for uncommitted changes", result.stderr
-        )
-        self.assertEqual(
             self.calls()[-1],
-            self.notification(
-                f"[{CWD}] could not be checked for uncommitted changes: exit status 128"
-            ),
+            self.pane_open("branch-review", "HERDR_HUNK_REVIEW_BASE=samecommit"),
         )
 
     def test_notifies_instead_of_opening_a_branch_review_outside_a_git_repository(

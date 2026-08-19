@@ -110,23 +110,13 @@ def default_branch_ref(cwd: str) -> str | None:
     return None
 
 
-def working_tree_is_dirty(cwd: str) -> bool:
-    """Report uncommitted work, keeping a failed query out of the clean answer."""
-    result = git(cwd, "status", "--porcelain")
-    if result.returncode != 0:
-        raise not_opened(
-            f"[{cwd}] could not be checked for uncommitted changes: "
-            f"{diagnostic(result)}"
-        )
-    return bool(result.stdout.strip())
-
-
 def branch_review_base(cwd: str) -> str:
     """Resolve the branch's starting commit before any pane opens.
 
     The base is frozen here as a commit id, so later movement on the default
-    branch cannot shift a review that is already open, and every way of
-    failing to find it stays a notification instead of a pane that dies.
+    branch cannot shift a review that is already open, and a base that cannot
+    be resolved stays a notification instead of a pane that dies. How much the
+    branch changed is Hunk's to render, including nothing at all.
     """
     ref = default_branch_ref(cwd)
     if not ref:
@@ -135,10 +125,6 @@ def branch_review_base(cwd: str) -> str:
     base = git_output(cwd, "merge-base", ref, "HEAD")
     if not base:
         raise not_opened(f"[{cwd}] has no merge base with {ref}.")
-
-    head = git_output(cwd, "rev-parse", "HEAD")
-    if head == base and not working_tree_is_dirty(cwd):
-        raise not_opened(f"[{cwd}] has no changes since {ref}.")
     return base
 
 
