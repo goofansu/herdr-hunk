@@ -10,6 +10,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(ROOT, "herdr_hunk.py")
+CWD = "/work/tree with spaces"
 
 FAKE = r"""#!{python}
 import json
@@ -20,9 +21,37 @@ program = {program!r}
 with open(os.environ["CALL_LOG"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps([program, *sys.argv[1:]]) + "\n")
 
-if program == "git" and sys.argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
-    print(os.environ.get("GIT_INSIDE", "true"))
-    sys.exit(int(os.environ.get("GIT_EXIT", "0")))
+if program == "git":
+    # Every Git query the plugin issues runs as `git -C <cwd> ...`, so the
+    # query shape starts after the directory flag. Each shape answers from its
+    # own variable, letting a test stage one step without touching the others.
+    query = sys.argv[3:]
+    if query == ["rev-parse", "--is-inside-work-tree"]:
+        print(os.environ.get("GIT_INSIDE", "true"))
+        sys.exit(int(os.environ.get("GIT_EXIT", "0")))
+    if query[0] == "symbolic-ref":
+        remote_head = os.environ.get("GIT_REMOTE_HEAD", "refs/remotes/origin/main")
+        if not remote_head:
+            sys.exit(1)
+        print(remote_head)
+        sys.exit(0)
+    if query[:2] == ["rev-parse", "--verify"]:
+        if query[-1] not in os.environ.get("GIT_LOCAL_BRANCHES", "").split():
+            sys.exit(1)
+        print("localbranchcommit")
+        sys.exit(0)
+    if query[0] == "merge-base":
+        merge_base = os.environ.get("GIT_MERGE_BASE", "mergebasecommit")
+        if not merge_base:
+            sys.exit(1)
+        print(merge_base)
+        sys.exit(0)
+    if query == ["rev-parse", "HEAD"]:
+        print(os.environ.get("GIT_HEAD", "headcommit"))
+        sys.exit(0)
+    if query == ["status", "--porcelain"]:
+        sys.stdout.write(os.environ.get("GIT_STATUS", ""))
+        sys.exit(int(os.environ.get("GIT_STATUS_EXIT", "0")))
 if program == "hunk":
     sys.exit(int(os.environ.get("HUNK_EXIT", "0")))
 sys.exit(int(os.environ.get("HERDR_EXIT", "0")))
@@ -45,7 +74,7 @@ class PluginTest(unittest.TestCase):
     def context(self) -> dict:
         return {
             "focused_pane_id": "w1:p1",
-            "focused_pane_cwd": "/work/tree with spaces",
+            "focused_pane_cwd": CWD,
         }
 
     def invoke(self, command: str, **extra):
@@ -69,79 +98,64 @@ class PluginTest(unittest.TestCase):
         with open(self.log, encoding="utf-8") as handle:
             return [json.loads(line) for line in handle]
 
+    def git_query(self, *query: str) -> list[str]:
+        return ["git", "-C", CWD, *query]
+
+    def pane_open(self, entrypoint: str, *env: str) -> list[str]:
+        settings = []
+        for setting in env:
+            settings += ["--env", setting]
+        return [
+            "herdr",
+            "plugin",
+            "pane",
+            "open",
+            "--plugin",
+            "herdr-hunk",
+            "--entrypoint",
+            entrypoint,
+            "--target-pane",
+            "w1:p1",
+            "--cwd",
+            CWD,
+            *settings,
+        ]
+
+    def notification(self, body: str) -> list[str]:
+        return [
+            "herdr",
+            "notification",
+            "show",
+            "Hunk review not opened",
+            "--body",
+            body,
+        ]
+
     def test_opens_hunk_without_inspecting_the_current_tab_layout(self) -> None:
         result = self.invoke("review-live-changes")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.calls(),
             [
-                [
-                    "git",
-                    "-C",
-                    "/work/tree with spaces",
-                    "rev-parse",
-                    "--is-inside-work-tree",
-                ],
-                [
-                    "herdr",
-                    "plugin",
-                    "pane",
-                    "open",
-                    "--plugin",
-                    "herdr-hunk",
-                    "--entrypoint",
-                    "review",
-                    "--target-pane",
-                    "w1:p1",
-                    "--cwd",
-                    "/work/tree with spaces",
-                ],
+                self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.pane_open("review"),
             ],
         )
 
     def test_opens_last_commit_review_in_a_right_split(self) -> None:
         result = self.invoke("review-last-commit")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            self.calls()[1],
-            [
-                "herdr",
-                "plugin",
-                "pane",
-                "open",
-                "--plugin",
-                "herdr-hunk",
-                "--entrypoint",
-                "last-commit-review",
-                "--target-pane",
-                "w1:p1",
-                "--cwd",
-                "/work/tree with spaces",
-            ],
-        )
+        self.assertEqual(self.calls()[1], self.pane_open("last-commit-review"))
 
     def test_notifies_instead_of_opening_hunk_outside_a_git_repository(self) -> None:
         result = self.invoke("review-live-changes", GIT_EXIT=128, GIT_INSIDE="")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("[/work/tree with spaces] is not a Git repository", result.stderr)
+        self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
         self.assertEqual(
             self.calls(),
             [
-                [
-                    "git",
-                    "-C",
-                    "/work/tree with spaces",
-                    "rev-parse",
-                    "--is-inside-work-tree",
-                ],
-                [
-                    "herdr",
-                    "notification",
-                    "show",
-                    "Hunk review not opened",
-                    "--body",
-                    "[/work/tree with spaces] is not a Git repository.",
-                ],
+                self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.notification(f"[{CWD}] is not a Git repository."),
             ],
         )
 
@@ -159,6 +173,201 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("run-live-changes-review", HUNK_EXIT=7)
         self.assertEqual(result.returncode, 7)
         self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
+
+    def test_opens_branch_review_with_the_merge_base_in_the_pane_environment(
+        self,
+    ) -> None:
+        result = self.invoke("review-branch-changes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.calls(),
+            [
+                self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
+                self.git_query("merge-base", "refs/remotes/origin/main", "HEAD"),
+                self.git_query("rev-parse", "HEAD"),
+                self.pane_open(
+                    "branch-review",
+                    "HERDR_HUNK_REVIEW_BASE=mergebasecommit",
+                ),
+            ],
+        )
+
+    def test_resolves_the_default_branch_from_the_remote_head(self) -> None:
+        result = self.invoke(
+            "review-branch-changes",
+            GIT_REMOTE_HEAD="refs/remotes/origin/trunk",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            self.git_query("merge-base", "refs/remotes/origin/trunk", "HEAD"),
+            self.calls(),
+        )
+
+    def test_falls_back_to_a_local_main_branch_when_no_remote_head_is_set(self) -> None:
+        result = self.invoke(
+            "review-branch-changes",
+            GIT_REMOTE_HEAD="",
+            GIT_LOCAL_BRANCHES="refs/heads/main refs/heads/master",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.calls()[1:4],
+            [
+                self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
+                self.git_query("rev-parse", "--verify", "--quiet", "refs/heads/main"),
+                self.git_query("merge-base", "refs/heads/main", "HEAD"),
+            ],
+        )
+
+    def test_falls_back_to_a_local_master_branch_when_main_is_absent(self) -> None:
+        result = self.invoke(
+            "review-branch-changes",
+            GIT_REMOTE_HEAD="",
+            GIT_LOCAL_BRANCHES="refs/heads/master",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.calls()[1:5],
+            [
+                self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
+                self.git_query("rev-parse", "--verify", "--quiet", "refs/heads/main"),
+                self.git_query("rev-parse", "--verify", "--quiet", "refs/heads/master"),
+                self.git_query("merge-base", "refs/heads/master", "HEAD"),
+            ],
+        )
+
+    def test_notifies_instead_of_opening_a_branch_review_without_a_default_branch(
+        self,
+    ) -> None:
+        result = self.invoke("review-branch-changes", GIT_REMOTE_HEAD="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            f"[{CWD}] has no default branch to compare against", result.stderr
+        )
+        self.assertEqual(
+            self.calls()[-1],
+            self.notification(f"[{CWD}] has no default branch to compare against."),
+        )
+
+    def test_notifies_instead_of_opening_a_branch_review_without_a_merge_base(
+        self,
+    ) -> None:
+        result = self.invoke("review-branch-changes", GIT_MERGE_BASE="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            f"[{CWD}] has no merge base with refs/remotes/origin/main", result.stderr
+        )
+        self.assertEqual(
+            self.calls()[-1],
+            self.notification(
+                f"[{CWD}] has no merge base with refs/remotes/origin/main."
+            ),
+        )
+
+    def test_notifies_instead_of_opening_an_empty_branch_review(self) -> None:
+        result = self.invoke(
+            "review-branch-changes",
+            GIT_MERGE_BASE="samecommit",
+            GIT_HEAD="samecommit",
+            GIT_STATUS="",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            f"[{CWD}] has no changes since refs/remotes/origin/main", result.stderr
+        )
+        self.assertEqual(
+            self.calls(),
+            [
+                self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
+                self.git_query("merge-base", "refs/remotes/origin/main", "HEAD"),
+                self.git_query("rev-parse", "HEAD"),
+                self.git_query("status", "--porcelain"),
+                self.notification(
+                    f"[{CWD}] has no changes since refs/remotes/origin/main."
+                ),
+            ],
+        )
+
+    def test_opens_branch_review_at_the_default_branch_with_uncommitted_changes(
+        self,
+    ) -> None:
+        result = self.invoke(
+            "review-branch-changes",
+            GIT_MERGE_BASE="samecommit",
+            GIT_HEAD="samecommit",
+            GIT_STATUS=" M herdr_hunk.py\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.calls()[-2:],
+            [
+                self.git_query("status", "--porcelain"),
+                self.pane_open("branch-review", "HERDR_HUNK_REVIEW_BASE=samecommit"),
+            ],
+        )
+
+    def test_notifies_when_uncommitted_changes_cannot_be_checked(self) -> None:
+        result = self.invoke(
+            "review-branch-changes",
+            GIT_MERGE_BASE="samecommit",
+            GIT_HEAD="samecommit",
+            GIT_STATUS_EXIT=128,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            f"[{CWD}] could not be checked for uncommitted changes", result.stderr
+        )
+        self.assertEqual(
+            self.calls()[-1],
+            self.notification(
+                f"[{CWD}] could not be checked for uncommitted changes: exit status 128"
+            ),
+        )
+
+    def test_notifies_instead_of_opening_a_branch_review_outside_a_git_repository(
+        self,
+    ) -> None:
+        result = self.invoke("review-branch-changes", GIT_EXIT=128, GIT_INSIDE="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
+        self.assertEqual(
+            self.calls(),
+            [
+                self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.notification(f"[{CWD}] is not a Git repository."),
+            ],
+        )
+
+    def test_runs_watched_hunk_diff_against_the_base_from_the_pane_environment(
+        self,
+    ) -> None:
+        result = self.invoke(
+            "run-branch-changes-review",
+            HERDR_HUNK_REVIEW_BASE="mergebasecommit",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]])
+
+    def test_fails_without_running_hunk_when_the_branch_review_base_is_missing(
+        self,
+    ) -> None:
+        for base in ({}, {"HERDR_HUNK_REVIEW_BASE": ""}):
+            with self.subTest(base=base):
+                result = self.invoke("run-branch-changes-review", **base)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("HERDR_HUNK_REVIEW_BASE is not set", result.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_propagates_hunk_failure_from_the_branch_review(self) -> None:
+        result = self.invoke(
+            "run-branch-changes-review",
+            HERDR_HUNK_REVIEW_BASE="mergebasecommit",
+            HUNK_EXIT=7,
+        )
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]])
 
 
 if __name__ == "__main__":
