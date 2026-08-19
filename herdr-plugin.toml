@@ -1,6 +1,6 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "1.1.0"
+version = "1.1.1"
 min_herdr_version = "0.8.0"
 description = "Review uncommitted changes, the last commit, or branch changes in Hunk"
 platforms = ["linux", "macos"]
@@ -28,18 +28,18 @@ command = ["python3", "herdr_hunk.py", "review-branch-changes"]
 
 [[panes]]
 id = "uncommitted-review"
-title = "Hunk uncommitted changes review"
+title = "Uncommitted changes"
 placement = "split"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-uncommitted-changes-review"]
 
 [[panes]]
 id = "last-commit-review"
-title = "Hunk last commit review"
+title = "Last commit"
 placement = "split"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-last-commit-review"]
 
 [[panes]]
 id = "branch-review"
-title = "Hunk branch changes review"
+title = "Branch changes"
 placement = "split"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-branch-changes-review"]
