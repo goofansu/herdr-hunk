@@ -122,9 +122,7 @@ class PluginTest(unittest.TestCase):
             *settings,
         ]
 
-    def notification(
-        self, body: str, title: str = "Hunk review failed"
-    ) -> list[str]:
+    def notification(self, body: str, title: str = "Hunk review failed") -> list[str]:
         return ["herdr", "notification", "show", title, "--body", body]
 
     def failure(self, reason: str) -> list[str]:
