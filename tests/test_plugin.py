@@ -29,6 +29,12 @@ if program == "git":
     if query == ["rev-parse", "--is-inside-work-tree"]:
         print(os.environ.get("GIT_INSIDE", "true"))
         sys.exit(int(os.environ.get("GIT_EXIT", "0")))
+    if query == ["rev-parse", "--verify", "--quiet", "HEAD"]:
+        head = os.environ.get("GIT_HEAD", "headcommit")
+        if not head:
+            sys.exit(1)
+        print(head)
+        sys.exit(0)
     if query[0] == "symbolic-ref":
         remote_head = os.environ.get("GIT_REMOTE_HEAD", "refs/remotes/origin/main")
         if not remote_head:
@@ -117,12 +123,12 @@ class PluginTest(unittest.TestCase):
         ]
 
     def notification(
-        self, body: str, title: str = "Hunk review not opened"
+        self, body: str, title: str = "Hunk review failed"
     ) -> list[str]:
         return ["herdr", "notification", "show", title, "--body", body]
 
-    def failure(self, body: str) -> list[str]:
-        return self.notification(body, title="Hunk review failed")
+    def failure(self, reason: str) -> list[str]:
+        return self.notification(f"[{ROOT}] {reason}")
 
     def test_opens_hunk_without_inspecting_the_current_tab_layout(self) -> None:
         result = self.invoke("review-uncommitted-changes")
@@ -131,6 +137,7 @@ class PluginTest(unittest.TestCase):
             self.calls(),
             [
                 self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.git_query("rev-parse", "--verify", "--quiet", "HEAD"),
                 self.pane_open("uncommitted-review"),
             ],
         )
@@ -138,8 +145,8 @@ class PluginTest(unittest.TestCase):
     def test_opens_last_commit_review_without_targeting_a_split_pane(self) -> None:
         result = self.invoke("review-last-commit")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls()[1], self.pane_open("last-commit-review"))
-        self.assertNotIn("--target-pane", self.calls()[1])
+        self.assertEqual(self.calls()[2], self.pane_open("last-commit-review"))
+        self.assertNotIn("--target-pane", self.calls()[2])
 
     def test_all_review_entrypoints_use_overlay_placement(self) -> None:
         manifest_path = os.path.join(ROOT, "herdr-plugin.toml")
@@ -148,27 +155,58 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(manifest.count('placement = "overlay"'), 3)
         self.assertNotIn('placement = "split"', manifest)
 
-    def test_notifies_instead_of_opening_hunk_outside_a_git_repository(self) -> None:
-        result = self.invoke("review-uncommitted-changes", GIT_EXIT=128, GIT_INSIDE="")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
-        self.assertEqual(
-            self.calls(),
-            [
-                self.git_query("rev-parse", "--is-inside-work-tree"),
-                self.notification(f"[{CWD}] is not a Git repository."),
-            ],
-        )
+    def test_all_review_actions_notify_before_opening_outside_a_git_repository(
+        self,
+    ) -> None:
+        for command in (
+            "review-uncommitted-changes",
+            "review-last-commit",
+            "review-branch-changes",
+        ):
+            with self.subTest(command=command):
+                call_count = len(self.calls())
+                result = self.invoke(command, GIT_EXIT=128, GIT_INSIDE="")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
+                self.assertEqual(
+                    self.calls()[call_count:],
+                    [
+                        self.git_query("rev-parse", "--is-inside-work-tree"),
+                        self.notification(f"[{CWD}] is not a Git repository."),
+                    ],
+                )
 
-    def test_runs_watched_hunk_diff_without_explicitly_closing_the_pane(self) -> None:
+    def test_all_review_actions_notify_before_opening_when_repo_has_no_commits(
+        self,
+    ) -> None:
+        for command in (
+            "review-uncommitted-changes",
+            "review-last-commit",
+            "review-branch-changes",
+        ):
+            with self.subTest(command=command):
+                call_count = len(self.calls())
+                result = self.invoke(command, GIT_HEAD="")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"[{CWD}] has no commits", result.stderr)
+                self.assertEqual(
+                    self.calls()[call_count:],
+                    [
+                        self.git_query("rev-parse", "--is-inside-work-tree"),
+                        self.git_query("rev-parse", "--verify", "--quiet", "HEAD"),
+                        self.notification(f"[{CWD}] has no commits."),
+                    ],
+                )
+
+    def test_runs_hunk_diff_from_head_with_the_sidebar_open(self) -> None:
         result = self.invoke("run-uncommitted-changes-review")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
+        self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--sidebar"]])
 
-    def test_runs_hunk_show_for_last_commit(self) -> None:
+    def test_runs_hunk_show_with_the_sidebar_open(self) -> None:
         result = self.invoke("run-last-commit-review")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["hunk", "show"]])
+        self.assertEqual(self.calls(), [["hunk", "show", "--sidebar"]])
 
     def test_notifies_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-uncommitted-changes-review", HUNK_EXIT=7)
@@ -176,7 +214,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(
             self.calls(),
             [
-                ["hunk", "diff", "--watch"],
+                ["hunk", "diff", "HEAD", "--sidebar"],
                 self.failure("Hunk exited with status 7."),
             ],
         )
@@ -200,6 +238,7 @@ class PluginTest(unittest.TestCase):
             self.calls(),
             [
                 self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.git_query("rev-parse", "--verify", "--quiet", "HEAD"),
                 self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
                 self.git_query("merge-base", "refs/remotes/origin/main", "HEAD"),
                 self.pane_open(
@@ -228,7 +267,7 @@ class PluginTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.calls()[1:4],
+            self.calls()[2:5],
             [
                 self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
                 self.git_query("rev-parse", "--verify", "--quiet", "refs/heads/main"),
@@ -244,7 +283,7 @@ class PluginTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.calls()[1:5],
+            self.calls()[2:6],
             [
                 self.git_query("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
                 self.git_query("rev-parse", "--verify", "--quiet", "refs/heads/main"),
@@ -289,21 +328,7 @@ class PluginTest(unittest.TestCase):
             self.pane_open("branch-review", "HERDR_HUNK_REVIEW_BASE=samecommit"),
         )
 
-    def test_notifies_instead_of_opening_a_branch_review_outside_a_git_repository(
-        self,
-    ) -> None:
-        result = self.invoke("review-branch-changes", GIT_EXIT=128, GIT_INSIDE="")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
-        self.assertEqual(
-            self.calls(),
-            [
-                self.git_query("rev-parse", "--is-inside-work-tree"),
-                self.notification(f"[{CWD}] is not a Git repository."),
-            ],
-        )
-
-    def test_runs_watched_hunk_diff_against_the_base_from_the_pane_environment(
+    def test_runs_hunk_diff_against_the_base_from_the_pane_environment(
         self,
     ) -> None:
         result = self.invoke(
@@ -311,7 +336,9 @@ class PluginTest(unittest.TestCase):
             HERDR_HUNK_REVIEW_BASE="mergebasecommit",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]])
+        self.assertEqual(
+            self.calls(), [["hunk", "diff", "mergebasecommit", "--sidebar"]]
+        )
 
     def test_fails_without_running_hunk_when_the_branch_review_base_is_missing(
         self,
@@ -337,7 +364,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(
             self.calls(),
             [
-                ["hunk", "diff", "mergebasecommit", "--watch"],
+                ["hunk", "diff", "mergebasecommit", "--sidebar"],
                 self.failure("Hunk exited with status 7."),
             ],
         )
@@ -346,7 +373,7 @@ class PluginTest(unittest.TestCase):
         """A pane the reviewer closed kills Hunk, which is not a failure."""
         result = self.invoke("run-uncommitted-changes-review", HUNK_SIGNAL="15")
         self.assertEqual(result.returncode, 143)
-        self.assertEqual(self.calls(), [["hunk", "diff", "--watch"]])
+        self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--sidebar"]])
 
 
 if __name__ == "__main__":

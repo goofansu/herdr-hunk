@@ -1,14 +1,14 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.8.0"
-description = "Opens a temporary Hunk review overlay for uncommitted changes, the last commit, or branch changes"
+description = "Opens temporary Hunk overlays for uncommitted changes, the last commit, or changes since the default branch"
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "review-uncommitted-changes"
 title = "Review uncommitted changes in Hunk"
-description = "Open a temporary Hunk review overlay that watches uncommitted changes and closes when you quit Hunk"
+description = "Open a temporary Hunk review overlay that shows uncommitted changes and closes when you quit Hunk"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-uncommitted-changes"]
 
@@ -22,7 +22,7 @@ command = ["python3", "herdr_hunk.py", "review-last-commit"]
 [[actions]]
 id = "review-branch-changes"
 title = "Review branch changes in Hunk"
-description = "Open a temporary Hunk review overlay that watches everything this branch changed since the default branch and closes when you quit Hunk"
+description = "Open a temporary Hunk review overlay for committed and uncommitted changes since this branch diverged from the default branch; closes when you quit Hunk"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-branch-changes"]
 

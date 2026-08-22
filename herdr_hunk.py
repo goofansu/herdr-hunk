@@ -19,7 +19,7 @@ PANE_COMMANDS = frozenset(
         "run-branch-changes-review",
     }
 )
-FAILURE_TITLE = "Hunk review failed"
+NOTIFICATION_TITLE = "Hunk review failed"
 REMOTE_HEAD_REF = "refs/remotes/origin/HEAD"
 LOCAL_DEFAULT_REFS = ("refs/heads/main", "refs/heads/master")
 USAGE = (
@@ -84,19 +84,24 @@ def notify(title: str, body: str) -> None:
     )
 
 
-def review_failed(message: str) -> None:
+def notification_body(cwd: str, reason: str) -> str:
+    return f"[{cwd}] {reason}"
+
+
+def review_failed(reason: str) -> None:
     """Report a failure from inside a review pane, which closes along with it.
 
     Herdr removes the pane the moment this process exits, taking Hunk's own
     output and our stderr line with it, so the notification is the only part a
     failure leaves behind.
     """
-    notify(FAILURE_TITLE, message)
+    notify(NOTIFICATION_TITLE, notification_body(os.getcwd(), reason))
 
 
-def not_opened(message: str) -> PluginError:
+def not_opened(cwd: str, reason: str) -> PluginError:
     """Explain a refused review in a notification as well as on stderr."""
-    notify("Hunk review not opened", message)
+    message = notification_body(cwd, reason)
+    notify(NOTIFICATION_TITLE, message)
     return PluginError(message)
 
 
@@ -114,7 +119,13 @@ def git_output(cwd: str, *query: str) -> str | None:
 def require_git_repository(cwd: str) -> None:
     if git_output(cwd, "rev-parse", "--is-inside-work-tree") == "true":
         return
-    raise not_opened(f"[{cwd}] is not a Git repository.")
+    raise not_opened(cwd, "is not a Git repository.")
+
+
+def require_commit(cwd: str) -> None:
+    if git_output(cwd, "rev-parse", "--verify", "--quiet", "HEAD"):
+        return
+    raise not_opened(cwd, "has no commits.")
 
 
 def default_branch_ref(cwd: str) -> str | None:
@@ -138,11 +149,11 @@ def branch_review_base(cwd: str) -> str:
     """
     ref = default_branch_ref(cwd)
     if not ref:
-        raise not_opened(f"[{cwd}] has no default branch to compare against.")
+        raise not_opened(cwd, "has no default branch to compare against.")
 
     base = git_output(cwd, "merge-base", ref, "HEAD")
     if not base:
-        raise not_opened(f"[{cwd}] has no merge base with {ref}.")
+        raise not_opened(cwd, f"has no merge base with {ref}.")
     return base
 
 
@@ -151,6 +162,7 @@ def review_cwd() -> str:
     context = read_context()
     cwd = required_context_value(context, "focused_pane_cwd", "focused pane cwd")
     require_git_repository(cwd)
+    require_commit(cwd)
     return cwd
 
 
@@ -173,7 +185,7 @@ def open_review(entrypoint: str, cwd: str, *env: str) -> int:
 
     result = run(argv, capture_output=True, text=True)
     if result.returncode != 0:
-        raise PluginError(f"could not open Hunk pane: {diagnostic(result)}")
+        raise not_opened(cwd, f"could not open Hunk overlay: {diagnostic(result)}")
     return 0
 
 
@@ -213,7 +225,7 @@ def run_branch_review() -> int:
     base = text(os.environ.get(REVIEW_BASE_ENV))
     if not base:
         raise PluginError(f"{REVIEW_BASE_ENV} is not set")
-    return run_review(["diff", base, "--watch"])
+    return run_review(["diff", base, "--sidebar"])
 
 
 def main(argv: list[str]) -> int:
@@ -228,9 +240,9 @@ def main(argv: list[str]) -> int:
         if argv[0] == "review-branch-changes":
             return review_branch_changes()
         if argv[0] == "run-uncommitted-changes-review":
-            return run_review(["diff", "--watch"])
+            return run_review(["diff", "HEAD", "--sidebar"])
         if argv[0] == "run-last-commit-review":
-            return run_review(["show"])
+            return run_review(["show", "--sidebar"])
         if argv[0] == "run-branch-changes-review":
             return run_branch_review()
     except PluginError as error:
