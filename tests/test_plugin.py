@@ -407,9 +407,7 @@ class PluginTest(unittest.TestCase):
             HERDR_HUNK_REVIEW_BASE="mergebasecommit",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]]
-        )
+        self.assertEqual(self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]])
 
     def test_fails_without_running_hunk_when_the_branch_review_base_is_missing(
         self,
