@@ -1,8 +1,8 @@
 id = "herdr-hunk"
 name = "Hunk Review"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.8.0"
-description = "Opens temporary Hunk overlays for uncommitted changes, the last commit, or changes since the default branch"
+description = "Opens temporary Hunk overlays for uncommitted changes, pull requests, or changes since the default branch"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -13,11 +13,11 @@ contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-uncommitted-changes"]
 
 [[actions]]
-id = "review-last-commit"
-title = "Review last commit in Hunk"
-description = "Open a temporary Hunk review overlay that shows the last commit and closes when you quit Hunk"
+id = "review-pull-request"
+title = "Review pull request in Hunk"
+description = "Download and review the current branch's GitHub pull request in a temporary Hunk overlay; closes when you quit Hunk"
 contexts = ["pane"]
-command = ["python3", "herdr_hunk.py", "review-last-commit"]
+command = ["python3", "herdr_hunk.py", "review-pull-request"]
 
 [[actions]]
 id = "review-branch-changes"
@@ -33,10 +33,10 @@ placement = "overlay"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-uncommitted-changes-review"]
 
 [[panes]]
-id = "last-commit-review"
-title = "Last commit"
+id = "pull-request-review"
+title = "Pull request"
 placement = "overlay"
-command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-last-commit-review"]
+command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-pull-request-review"]
 
 [[panes]]
 id = "branch-review"

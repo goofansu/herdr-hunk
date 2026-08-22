@@ -10,7 +10,6 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(ROOT, "herdr_hunk.py")
-CWD = "/work/tree with spaces"
 
 FAKE = r"""#!{python}
 import json
@@ -52,6 +51,22 @@ if program == "git":
             sys.exit(1)
         print(merge_base)
         sys.exit(0)
+if program == "gh":
+    if sys.argv[1:3] == ["pr", "view"]:
+        number = os.environ.get("GH_PR_NUMBER", "123")
+        if not number:
+            print("no pull requests found for branch", file=sys.stderr)
+            sys.exit(1)
+        print(number)
+        sys.exit(0)
+    if sys.argv[1:3] == ["pr", "diff"]:
+        print("diff --git a/example.txt b/example.txt")
+        print("--- a/example.txt")
+        print("+++ b/example.txt")
+        print("@@ -1 +1 @@")
+        print("-before")
+        print("+after")
+        sys.exit(int(os.environ.get("GH_DIFF_EXIT", "0")))
 if program == "hunk":
     signal = os.environ.get("HUNK_SIGNAL")
     if signal:
@@ -65,10 +80,12 @@ class PluginTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
+        self.cwd = os.path.join(self.tmp, "work tree with spaces")
+        os.mkdir(self.cwd)
         self.bin = os.path.join(self.tmp, "bin")
         os.mkdir(self.bin)
         self.log = os.path.join(self.tmp, "calls.jsonl")
-        for program in ("git", "herdr", "hunk"):
+        for program in ("git", "herdr", "hunk", "gh"):
             path = os.path.join(self.bin, program)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(FAKE.format(python=sys.executable, program=program))
@@ -77,7 +94,7 @@ class PluginTest(unittest.TestCase):
     def context(self) -> dict:
         return {
             "focused_pane_id": "w1:p1",
-            "focused_pane_cwd": CWD,
+            "focused_pane_cwd": self.cwd,
         }
 
     def invoke(self, command: str, **extra):
@@ -102,7 +119,7 @@ class PluginTest(unittest.TestCase):
             return [json.loads(line) for line in handle]
 
     def git_query(self, *query: str) -> list[str]:
-        return ["git", "-C", CWD, *query]
+        return ["git", "-C", self.cwd, *query]
 
     def pane_open(self, entrypoint: str, *env: str) -> list[str]:
         settings = []
@@ -118,7 +135,7 @@ class PluginTest(unittest.TestCase):
             "--entrypoint",
             entrypoint,
             "--cwd",
-            CWD,
+            self.cwd,
             *settings,
         ]
 
@@ -140,11 +157,24 @@ class PluginTest(unittest.TestCase):
             ],
         )
 
-    def test_opens_last_commit_review_without_targeting_a_split_pane(self) -> None:
-        result = self.invoke("review-last-commit")
+    def test_opens_pull_request_review_for_the_current_branch(self) -> None:
+        result = self.invoke("review-pull-request")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls()[2], self.pane_open("last-commit-review"))
-        self.assertNotIn("--target-pane", self.calls()[2])
+        self.assertEqual(
+            self.calls(),
+            [
+                self.git_query("rev-parse", "--is-inside-work-tree"),
+                self.git_query("rev-parse", "--verify", "--quiet", "HEAD"),
+                ["gh", "pr", "view", "--json", "number", "--jq", ".number"],
+                self.pane_open("pull-request-review", "HERDR_HUNK_PR_NUMBER=123"),
+            ],
+        )
+
+    def test_last_commit_review_is_no_longer_available(self) -> None:
+        result = self.invoke("review-last-commit")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown command 'review-last-commit'", result.stderr)
+        self.assertEqual(self.calls(), [])
 
     def test_all_review_entrypoints_use_overlay_placement(self) -> None:
         manifest_path = os.path.join(ROOT, "herdr-plugin.toml")
@@ -158,19 +188,19 @@ class PluginTest(unittest.TestCase):
     ) -> None:
         for command in (
             "review-uncommitted-changes",
-            "review-last-commit",
+            "review-pull-request",
             "review-branch-changes",
         ):
             with self.subTest(command=command):
                 call_count = len(self.calls())
                 result = self.invoke(command, GIT_EXIT=128, GIT_INSIDE="")
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn(f"[{CWD}] is not a Git repository", result.stderr)
+                self.assertIn(f"[{self.cwd}] is not a Git repository", result.stderr)
                 self.assertEqual(
                     self.calls()[call_count:],
                     [
                         self.git_query("rev-parse", "--is-inside-work-tree"),
-                        self.notification(f"[{CWD}] is not a Git repository."),
+                        self.notification(f"[{self.cwd}] is not a Git repository."),
                     ],
                 )
 
@@ -179,32 +209,72 @@ class PluginTest(unittest.TestCase):
     ) -> None:
         for command in (
             "review-uncommitted-changes",
-            "review-last-commit",
+            "review-pull-request",
             "review-branch-changes",
         ):
             with self.subTest(command=command):
                 call_count = len(self.calls())
                 result = self.invoke(command, GIT_HEAD="")
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn(f"[{CWD}] has no commits", result.stderr)
+                self.assertIn(f"[{self.cwd}] has no commits", result.stderr)
                 self.assertEqual(
                     self.calls()[call_count:],
                     [
                         self.git_query("rev-parse", "--is-inside-work-tree"),
                         self.git_query("rev-parse", "--verify", "--quiet", "HEAD"),
-                        self.notification(f"[{CWD}] has no commits."),
+                        self.notification(f"[{self.cwd}] has no commits."),
                     ],
                 )
 
-    def test_runs_hunk_diff_from_head_with_the_sidebar_open(self) -> None:
+    def test_runs_hunk_diff_from_head_in_watch_mode(self) -> None:
         result = self.invoke("run-uncommitted-changes-review")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--sidebar"]])
+        self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--watch"]])
 
-    def test_runs_hunk_show_with_the_sidebar_open(self) -> None:
-        result = self.invoke("run-last-commit-review")
+    def test_notifies_when_gh_is_not_installed(self) -> None:
+        os.remove(os.path.join(self.bin, "gh"))
+        result = self.invoke("review-pull-request")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not run gh", result.stderr)
+        self.assertEqual(
+            self.calls()[-1][:4],
+            ["herdr", "notification", "show", "Hunk review failed"],
+        )
+        self.assertIn(f"[{self.cwd}] could not run gh", self.calls()[-1][-1])
+
+    def test_notifies_when_current_branch_has_no_pull_request(self) -> None:
+        result = self.invoke("review-pull-request", GH_PR_NUMBER="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no pull requests found for branch", result.stderr)
+        self.assertEqual(
+            self.calls()[-1],
+            self.notification(f"[{self.cwd}] pull request lookup failed."),
+        )
+
+    def test_fetches_pull_request_diff_and_opens_it(self) -> None:
+        result = self.invoke("run-pull-request-review", HERDR_HUNK_PR_NUMBER="123")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), [["hunk", "show", "--sidebar"]])
+        self.assertEqual(result.stdout, "Loading pull request #123…\n")
+        calls = self.calls()
+        self.assertEqual(calls[0], ["gh", "pr", "diff", "123", "--color=never"])
+        self.assertEqual(calls[1][0:2], ["hunk", "patch"])
+        self.assertEqual(len(calls[1]), 3)
+        self.assertEqual(os.path.basename(calls[1][2]), "pull-request-123.diff")
+
+    def test_notifies_when_pull_request_diff_cannot_be_loaded(self) -> None:
+        result = self.invoke(
+            "run-pull-request-review",
+            HERDR_HUNK_PR_NUMBER="123",
+            GH_DIFF_EXIT=1,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            self.calls(),
+            [
+                ["gh", "pr", "diff", "123", "--color=never"],
+                self.failure("could not load pull request #123: exit status 1"),
+            ],
+        )
 
     def test_notifies_hunk_failure_without_explicitly_closing_the_pane(self) -> None:
         result = self.invoke("run-uncommitted-changes-review", HUNK_EXIT=7)
@@ -212,7 +282,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(
             self.calls(),
             [
-                ["hunk", "diff", "HEAD", "--sidebar"],
+                ["hunk", "diff", "HEAD", "--watch"],
                 self.failure("Hunk exited with status 7."),
             ],
         )
@@ -296,11 +366,13 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("review-branch-changes", GIT_REMOTE_HEAD="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
-            f"[{CWD}] has no default branch to compare against", result.stderr
+            f"[{self.cwd}] has no default branch to compare against", result.stderr
         )
         self.assertEqual(
             self.calls()[-1],
-            self.notification(f"[{CWD}] has no default branch to compare against."),
+            self.notification(
+                f"[{self.cwd}] has no default branch to compare against."
+            ),
         )
 
     def test_notifies_instead_of_opening_a_branch_review_without_a_merge_base(
@@ -309,12 +381,13 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("review-branch-changes", GIT_MERGE_BASE="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
-            f"[{CWD}] has no merge base with refs/remotes/origin/main", result.stderr
+            f"[{self.cwd}] has no merge base with refs/remotes/origin/main",
+            result.stderr,
         )
         self.assertEqual(
             self.calls()[-1],
             self.notification(
-                f"[{CWD}] has no merge base with refs/remotes/origin/main."
+                f"[{self.cwd}] has no merge base with refs/remotes/origin/main."
             ),
         )
 
@@ -335,7 +408,7 @@ class PluginTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.calls(), [["hunk", "diff", "mergebasecommit", "--sidebar"]]
+            self.calls(), [["hunk", "diff", "mergebasecommit", "--watch"]]
         )
 
     def test_fails_without_running_hunk_when_the_branch_review_base_is_missing(
@@ -362,7 +435,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(
             self.calls(),
             [
-                ["hunk", "diff", "mergebasecommit", "--sidebar"],
+                ["hunk", "diff", "mergebasecommit", "--watch"],
                 self.failure("Hunk exited with status 7."),
             ],
         )
@@ -371,7 +444,7 @@ class PluginTest(unittest.TestCase):
         """A pane the reviewer closed kills Hunk, which is not a failure."""
         result = self.invoke("run-uncommitted-changes-review", HUNK_SIGNAL="15")
         self.assertEqual(result.returncode, 143)
-        self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--sidebar"]])
+        self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--watch"]])
 
 
 if __name__ == "__main__":

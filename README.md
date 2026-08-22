@@ -5,6 +5,7 @@ Provides quick Herdr review actions that open a temporary Hunk overlay. Quitting
 ## Requirements
 
 - [Hunk](https://github.com/modem-dev/hunk)
+- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login` for pull request reviews
 
 ## Install
 
@@ -16,11 +17,13 @@ herdr plugin install goofansu/herdr-hunk
 
 | Action | Review scope | Hunk command |
 | --- | --- | --- |
-| `review-uncommitted-changes` | Staged, unstaged, and untracked changes | `hunk diff HEAD --sidebar` |
-| `review-last-commit` | Changes introduced by the latest commit | `hunk show --sidebar` |
-| `review-branch-changes` | Committed and uncommitted changes since the branch diverged from the default branch | `hunk diff <merge-base> --sidebar` |
+| `review-uncommitted-changes` | Staged, unstaged, and untracked changes | `hunk diff HEAD --watch` |
+| `review-branch-changes` | Committed and uncommitted changes since the branch diverged from the default branch | `hunk diff <merge-base> --watch` |
+| `review-pull-request` | Changes published in the current branch's GitHub pull request | `hunk patch <pull-request.diff>` |
 
-The branch review uses the merge-base with `origin/HEAD`, falling back to local `main` or `master` when the remote default branch is unavailable.
+The pull-request review finds the current branch's pull request before opening the overlay. The overlay displays `Loading pull request #123…` while `gh pr diff` streams the patch to a temporary file, then opens it in Hunk.
+
+Uncommitted and branch reviews watch the worktree and reload as it changes. The branch review uses the merge-base with `origin/HEAD`, falling back to local `main` or `master` when the remote default branch is unavailable.
 
 Each action validates that the focused directory is a Git repository with at least one commit before opening an overlay. Errors use the title `Hunk review failed` and the body format `[working-directory] reason`.
 
@@ -44,6 +47,6 @@ description = "review branch changes in Hunk"
 [[keys.command]]
 key = "prefix+alt+r"
 type = "plugin_action"
-command = "herdr-hunk.review-last-commit"
-description = "review last commit in Hunk"
+command = "herdr-hunk.review-pull-request"
+description = "review pull request in Hunk"
 ```

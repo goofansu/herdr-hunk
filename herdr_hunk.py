@@ -6,16 +6,18 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 PLUGIN_ID = "herdr-hunk"
 UNCOMMITTED_REVIEW_ENTRYPOINT = "uncommitted-review"
-LAST_COMMIT_ENTRYPOINT = "last-commit-review"
+PULL_REQUEST_REVIEW_ENTRYPOINT = "pull-request-review"
 BRANCH_REVIEW_ENTRYPOINT = "branch-review"
 REVIEW_BASE_ENV = "HERDR_HUNK_REVIEW_BASE"
+PULL_REQUEST_NUMBER_ENV = "HERDR_HUNK_PR_NUMBER"
 PANE_COMMANDS = frozenset(
     {
         "run-uncommitted-changes-review",
-        "run-last-commit-review",
+        "run-pull-request-review",
         "run-branch-changes-review",
     }
 )
@@ -24,8 +26,8 @@ REMOTE_HEAD_REF = "refs/remotes/origin/HEAD"
 LOCAL_DEFAULT_REFS = ("refs/heads/main", "refs/heads/master")
 USAGE = (
     "usage: herdr_hunk.py "
-    "(review-uncommitted-changes | review-last-commit | review-branch-changes | "
-    "run-uncommitted-changes-review | run-last-commit-review | "
+    "(review-uncommitted-changes | review-pull-request | review-branch-changes | "
+    "run-uncommitted-changes-review | run-pull-request-review | "
     "run-branch-changes-review)"
 )
 
@@ -98,10 +100,12 @@ def review_failed(reason: str) -> None:
     notify(NOTIFICATION_TITLE, notification_body(os.getcwd(), reason))
 
 
-def not_opened(cwd: str, reason: str) -> PluginError:
+def not_opened(cwd: str, reason: str, detail: str | None = None) -> PluginError:
     """Explain a refused review in a notification as well as on stderr."""
     message = notification_body(cwd, reason)
     notify(NOTIFICATION_TITLE, message)
+    if detail:
+        message = f"{message} {detail}"
     return PluginError(message)
 
 
@@ -193,8 +197,36 @@ def review_uncommitted_changes() -> int:
     return open_review(UNCOMMITTED_REVIEW_ENTRYPOINT, review_cwd())
 
 
-def review_last_commit() -> int:
-    return open_review(LAST_COMMIT_ENTRYPOINT, review_cwd())
+def pull_request_number(cwd: str) -> str:
+    try:
+        result = run(
+            ["gh", "pr", "view", "--json", "number", "--jq", ".number"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+    except PluginError as error:
+        raise not_opened(cwd, str(error)) from error
+    if result.returncode != 0:
+        raise not_opened(
+            cwd,
+            "pull request lookup failed.",
+            diagnostic(result),
+        )
+    number = text(result.stdout.strip())
+    if not number or not number.isdecimal():
+        raise not_opened(cwd, "GitHub returned an invalid pull request number.")
+    return number
+
+
+def review_pull_request() -> int:
+    cwd = review_cwd()
+    number = pull_request_number(cwd)
+    return open_review(
+        PULL_REQUEST_REVIEW_ENTRYPOINT,
+        cwd,
+        f"{PULL_REQUEST_NUMBER_ENV}={number}",
+    )
 
 
 def review_branch_changes() -> int:
@@ -219,13 +251,38 @@ def run_review(hunk_args: list[str]) -> int:
     return status
 
 
+def run_pull_request_review() -> int:
+    number = text(os.environ.get(PULL_REQUEST_NUMBER_ENV))
+    if not number:
+        raise PluginError(f"{PULL_REQUEST_NUMBER_ENV} is not set")
+    if not number.isdecimal():
+        raise PluginError(f"{PULL_REQUEST_NUMBER_ENV} is not a pull request number")
+
+    print(f"Loading pull request #{number}\N{HORIZONTAL ELLIPSIS}", flush=True)
+    with tempfile.TemporaryDirectory(prefix="herdr-hunk-") as directory:
+        patch = os.path.join(directory, f"pull-request-{number}.diff")
+        with open(patch, "w", encoding="utf-8") as output:
+            result = run(
+                ["gh", "pr", "diff", number, "--color=never"],
+                stdout=output,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        if result.returncode != 0:
+            review_failed(
+                f"could not load pull request #{number}: {diagnostic(result)}"
+            )
+            return result.returncode
+        return run_review(["patch", patch])
+
+
 def run_branch_review() -> int:
     # The action resolves the base and passes it in the pane's environment, so
     # a missing value here can only mean a mis-wired invocation.
     base = text(os.environ.get(REVIEW_BASE_ENV))
     if not base:
         raise PluginError(f"{REVIEW_BASE_ENV} is not set")
-    return run_review(["diff", base, "--sidebar"])
+    return run_review(["diff", base, "--watch"])
 
 
 def main(argv: list[str]) -> int:
@@ -235,14 +292,14 @@ def main(argv: list[str]) -> int:
     try:
         if argv[0] == "review-uncommitted-changes":
             return review_uncommitted_changes()
-        if argv[0] == "review-last-commit":
-            return review_last_commit()
+        if argv[0] == "review-pull-request":
+            return review_pull_request()
         if argv[0] == "review-branch-changes":
             return review_branch_changes()
         if argv[0] == "run-uncommitted-changes-review":
-            return run_review(["diff", "HEAD", "--sidebar"])
-        if argv[0] == "run-last-commit-review":
-            return run_review(["show", "--sidebar"])
+            return run_review(["diff", "HEAD", "--watch"])
+        if argv[0] == "run-pull-request-review":
+            return run_pull_request_review()
         if argv[0] == "run-branch-changes-review":
             return run_branch_review()
     except PluginError as error:
