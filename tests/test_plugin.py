@@ -111,8 +111,6 @@ class PluginTest(unittest.TestCase):
             "herdr-hunk",
             "--entrypoint",
             entrypoint,
-            "--target-pane",
-            "w1:p1",
             "--cwd",
             CWD,
             *settings,
@@ -137,10 +135,18 @@ class PluginTest(unittest.TestCase):
             ],
         )
 
-    def test_opens_last_commit_review_in_a_right_split(self) -> None:
+    def test_opens_last_commit_review_without_targeting_a_split_pane(self) -> None:
         result = self.invoke("review-last-commit")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls()[1], self.pane_open("last-commit-review"))
+        self.assertNotIn("--target-pane", self.calls()[1])
+
+    def test_all_review_entrypoints_use_overlay_placement(self) -> None:
+        manifest_path = os.path.join(ROOT, "herdr-plugin.toml")
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = handle.read()
+        self.assertEqual(manifest.count('placement = "overlay"'), 3)
+        self.assertNotIn('placement = "split"', manifest)
 
     def test_notifies_instead_of_opening_hunk_outside_a_git_repository(self) -> None:
         result = self.invoke("review-uncommitted-changes", GIT_EXIT=128, GIT_INSIDE="")

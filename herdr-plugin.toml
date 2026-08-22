@@ -2,44 +2,44 @@ id = "herdr-hunk"
 name = "Hunk Review"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
-description = "Opens a Hunk pane for uncommitted changes, the last commit, or branch changes"
+description = "Opens a temporary Hunk review overlay for uncommitted changes, the last commit, or branch changes"
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "review-uncommitted-changes"
 title = "Review uncommitted changes in Hunk"
-description = "Open a Hunk pane to the right that watches uncommitted changes and closes when you quit Hunk"
+description = "Open a temporary Hunk review overlay that watches uncommitted changes and closes when you quit Hunk"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-uncommitted-changes"]
 
 [[actions]]
 id = "review-last-commit"
 title = "Review last commit in Hunk"
-description = "Open a Hunk pane to the right that shows the last commit and closes when you quit Hunk"
+description = "Open a temporary Hunk review overlay that shows the last commit and closes when you quit Hunk"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-last-commit"]
 
 [[actions]]
 id = "review-branch-changes"
 title = "Review branch changes in Hunk"
-description = "Open a Hunk pane to the right that watches everything this branch changed since the default branch and closes when you quit Hunk"
+description = "Open a temporary Hunk review overlay that watches everything this branch changed since the default branch and closes when you quit Hunk"
 contexts = ["pane"]
 command = ["python3", "herdr_hunk.py", "review-branch-changes"]
 
 [[panes]]
 id = "uncommitted-review"
 title = "Uncommitted changes"
-placement = "split"
+placement = "overlay"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-uncommitted-changes-review"]
 
 [[panes]]
 id = "last-commit-review"
 title = "Last commit"
-placement = "split"
+placement = "overlay"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-last-commit-review"]
 
 [[panes]]
 id = "branch-review"
 title = "Branch changes"
-placement = "split"
+placement = "overlay"
 command = ["sh", "-c", "exec python3 \"$HERDR_PLUGIN_ROOT/herdr_hunk.py\" run-branch-changes-review"]

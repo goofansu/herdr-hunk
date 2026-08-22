@@ -1,6 +1,6 @@
 # herdr-hunk
 
-Opens a Hunk pane for uncommitted changes, the last commit, or everything this branch changed, and closes it when you quit Hunk.
+Provides quick Herdr review actions that open a temporary Hunk overlay for uncommitted changes, the last commit, or everything this branch changed. The overlay closes and restores your workspace when you quit Hunk.
 
 ## Requirements
 

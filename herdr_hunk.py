@@ -1,4 +1,4 @@
-"""Open a self-closing Hunk review beside a Herdr pane."""
+"""Open a self-closing Hunk review overlay from a Herdr action."""
 
 from __future__ import annotations
 
@@ -146,17 +146,16 @@ def branch_review_base(cwd: str) -> str:
     return base
 
 
-def review_target() -> tuple[str, str]:
-    """Read the invoking pane out of Herdr's context and validate its checkout."""
+def review_cwd() -> str:
+    """Read and validate the invoking pane's checkout from Herdr's context."""
     context = read_context()
-    pane_id = required_context_value(context, "focused_pane_id", "focused pane")
     cwd = required_context_value(context, "focused_pane_cwd", "focused pane cwd")
     require_git_repository(cwd)
-    return pane_id, cwd
+    return cwd
 
 
-def open_review(entrypoint: str, pane_id: str, cwd: str, *env: str) -> int:
-    """Open a review pane while hiding Herdr's layout and context plumbing."""
+def open_review(entrypoint: str, cwd: str, *env: str) -> int:
+    """Open a review overlay while hiding Herdr's context plumbing."""
     argv = [
         herdr_bin(),
         "plugin",
@@ -166,8 +165,6 @@ def open_review(entrypoint: str, pane_id: str, cwd: str, *env: str) -> int:
         PLUGIN_ID,
         "--entrypoint",
         entrypoint,
-        "--target-pane",
-        pane_id,
         "--cwd",
         cwd,
     ]
@@ -181,21 +178,17 @@ def open_review(entrypoint: str, pane_id: str, cwd: str, *env: str) -> int:
 
 
 def review_uncommitted_changes() -> int:
-    pane_id, cwd = review_target()
-    return open_review(UNCOMMITTED_REVIEW_ENTRYPOINT, pane_id, cwd)
+    return open_review(UNCOMMITTED_REVIEW_ENTRYPOINT, review_cwd())
 
 
 def review_last_commit() -> int:
-    pane_id, cwd = review_target()
-    return open_review(LAST_COMMIT_ENTRYPOINT, pane_id, cwd)
+    return open_review(LAST_COMMIT_ENTRYPOINT, review_cwd())
 
 
 def review_branch_changes() -> int:
-    pane_id, cwd = review_target()
+    cwd = review_cwd()
     base = branch_review_base(cwd)
-    return open_review(
-        BRANCH_REVIEW_ENTRYPOINT, pane_id, cwd, f"{REVIEW_BASE_ENV}={base}"
-    )
+    return open_review(BRANCH_REVIEW_ENTRYPOINT, cwd, f"{REVIEW_BASE_ENV}={base}")
 
 
 def run_review(hunk_args: list[str]) -> int:
