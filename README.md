@@ -15,15 +15,15 @@ herdr plugin install goofansu/herdr-hunk
 
 ## Actions
 
-| Action | Review scope | Hunk command |
+| Action | Use when | Hunk command |
 | --- | --- | --- |
-| `review-uncommitted-changes` | Staged, unstaged, and untracked changes | `hunk diff HEAD --watch` |
-| `review-branch-changes` | Committed and uncommitted changes since the branch diverged from the default branch | `hunk diff <merge-base> --watch` |
-| `review-pull-request` | Changes published in the current branch's GitHub pull request | `hunk patch <pull-request.diff>` |
+| `review-uncommitted-changes` | Checking staged, unstaged, and untracked edits before committing | `hunk diff HEAD --watch` |
+| `review-branch-changes` | Reviewing the complete local branch before publishing or merging | `hunk diff <merge-base> --watch` |
+| `review-pull-request` | Checking the exact patch currently published for GitHub reviewers | `hunk patch <pull-request.diff>` |
 
-The pull-request review finds the current branch's pull request before opening the overlay. The overlay displays `Loading pull request #123…` while `gh pr diff` streams the patch to a temporary file, then opens it in Hunk.
+Uncommitted and branch reviews include local work and reload as the worktree changes. A branch review starts where the branch diverged from `origin/HEAD`, falling back to local `main` or `master` when the remote default branch is unavailable.
 
-Uncommitted and branch reviews watch the worktree and reload as it changes. The branch review uses the merge-base with `origin/HEAD`, falling back to local `main` or `master` when the remote default branch is unavailable.
+A pull-request review finds the current branch's GitHub pull request and streams its patch into a temporary file while the overlay displays `Loading pull request #123…`. Hunk opens that file after the download completes; the file remains available for the review, then is deleted when Hunk exits (or when loading fails). The snapshot excludes local uncommitted and unpushed changes and does not auto-refresh.
 
 Each action validates that the focused directory is a Git repository with at least one commit before opening an overlay. Errors use the title `Hunk review failed` and the body format `[working-directory] reason`.
 
