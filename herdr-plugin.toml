@@ -1,6 +1,6 @@
 id = "herdr-hunk"
 name = "Hunk review"
-version = "0.3.0"
+version = "0.3.1"
 min_herdr_version = "0.8.0"
 description = "Opens temporary Hunk overlays for uncommitted changes, pull requests, or changes since the default branch"
 platforms = ["linux", "macos"]
