@@ -235,10 +235,29 @@ def review_branch_changes() -> int:
     return open_review(BRANCH_REVIEW_ENTRYPOINT, cwd, f"{REVIEW_BASE_ENV}={base}")
 
 
+def refresh_overlay_geometry() -> None:
+    """Apply the overlay's full-tab PTY dimensions before Hunk renders."""
+    pane_id = text(os.environ.get("HERDR_PANE_ID"))
+    if not pane_id:
+        return
+
+    for state in ("--off", "--on"):
+        result = run(
+            [herdr_bin(), "pane", "zoom", pane_id, state],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise PluginError(
+                f"could not refresh Hunk overlay geometry: {diagnostic(result)}"
+            )
+
+
 def run_review(hunk_args: list[str]) -> int:
     # Herdr removes a plugin pane when its initial process exits. Let this
     # wrapper end naturally with Hunk instead of explicitly closing the pane;
     # an explicit close races with the runtime's PaneDied event.
+    refresh_overlay_geometry()
     status = run(["hunk", *hunk_args]).returncode
     if status < 0:
         # A signal ended Hunk, which is how a pane the reviewer closed
