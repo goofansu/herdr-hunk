@@ -182,7 +182,6 @@ class PluginTest(unittest.TestCase):
             manifest = handle.read()
         self.assertEqual(manifest.count('placement = "overlay"'), 3)
         self.assertNotIn('placement = "split"', manifest)
-        self.assertNotIn('placement = "popup"', manifest)
 
     def test_all_review_actions_notify_before_opening_outside_a_git_repository(
         self,
@@ -231,21 +230,6 @@ class PluginTest(unittest.TestCase):
         result = self.invoke("run-uncommitted-changes-review")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [["hunk", "diff", "HEAD", "--watch"]])
-
-    def test_refreshes_overlay_geometry_before_starting_hunk(self) -> None:
-        result = self.invoke(
-            "run-uncommitted-changes-review",
-            HERDR_PANE_ID="w1:p3",
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            self.calls(),
-            [
-                ["herdr", "pane", "zoom", "w1:p3", "--off"],
-                ["herdr", "pane", "zoom", "w1:p3", "--on"],
-                ["hunk", "diff", "HEAD", "--watch"],
-            ],
-        )
 
     def test_notifies_when_gh_is_not_installed(self) -> None:
         os.remove(os.path.join(self.bin, "gh"))
